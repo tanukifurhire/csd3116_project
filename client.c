@@ -7,10 +7,14 @@
 3. Start server, then start client one by one
 4. Each client can see itself and all other clients
 5. Each client can move itself using the arrow keys
-6. Collision detection among all players and the window is supported */
+6. Collision detection among all players and the window is supported
+7. Each client must pick a unique (case-insensitive) player name, max 8 chars,
+   before being admitted by the server */
 
 #include <GLFW/glfw3.h>
 #include <stdio.h>
+#include <string.h>
+#include <strings.h>
 #include <pthread.h>
 #include <unistd.h>
 #include "dds/dds.h"
@@ -22,6 +26,7 @@
 #define MAX_SAMPLES 1
 #define MAX_PLAYERS 5
 
+#define MAX_NAME_LEN 8
 
 #define WIDTH  800
 #define HEIGHT 600
@@ -34,6 +39,7 @@ typedef struct
     bool b_active;
     int x;
     int y;
+    char str_name[MAX_NAME_LEN + 1];
 } Player;
 
 // ### GLOBAL VARIABLES ###
@@ -46,6 +52,11 @@ static Player arr_Players[MAX_PLAYERS] = {0};
 // Direction - n means no direction
 char ch_dir = 'n';
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// This client's chosen name (set once before the worker thread starts,
+// and possibly updated by the worker thread itself if the name is taken -
+// never touched concurrently by two threads at once)
+char str_my_name[MAX_NAME_LEN + 1] = {0};
 
 void draw_text(float x, float y, float scale, const char *text)
 {
@@ -72,6 +83,30 @@ void draw_text(float x, float y, float scale, const char *text)
     glDisableClientState(GL_VERTEX_ARRAY);
 
     glPopMatrix();
+}
+
+// Prompt on stdin for a name, truncate to MAX_NAME_LEN chars, strip newline.
+// Falls back to "Player" if the user just hits enter.
+void prompt_for_name(char *out_name)
+{
+    char str_input[64];
+
+    if (fgets(str_input, sizeof(str_input), stdin) != NULL)
+    {
+        str_input[strcspn(str_input, "\n")] = '\0';
+    }
+    else
+    {
+        str_input[0] = '\0';
+    }
+
+    strncpy(out_name, str_input, MAX_NAME_LEN);
+    out_name[MAX_NAME_LEN] = '\0';
+
+    if (strlen(out_name) == 0)
+    {
+        strcpy(out_name, "Player");
+    }
 }
 
 void *worker(void *arg)
@@ -188,6 +223,8 @@ void *worker(void *arg)
 		
 	JoinRequest request;
     request.b_dummy = true;
+	strncpy(request.str_name, str_my_name, MAX_NAME_LEN);
+	request.str_name[MAX_NAME_LEN] = '\0';
 	
 	/* Initialize sample buffer, by pointing the void pointer within
 	* the buffer array to a valid sample memory location. */
@@ -215,19 +252,47 @@ void *worker(void *arg)
 			/* Check if we read some data and it is valid. */
 			if ((rc > 0) && (infos_response[0].valid_data))
 			{
-				printf("Join response received\n");
 				JoinResponse *response = (JoinResponse *) samples_response[0];
-				int int_resp_player_id = response->int_player_id;
-				// If server responded with an invalid player ID
-				if (int_resp_player_id == 0)
-					printf("Unable to join\n");
-				else
+
+				// Multiple clients share this reader/topic, so only react
+				// to a response that was addressed to the name we requested.
+				if (strcasecmp(response->str_name, str_my_name) == 0)
 				{
-					// printf("Join response player ID = %d\n", response->int_player_id);
-					pthread_mutex_lock(&mutex);
-					// Update player ID
-					int_player_id = int_resp_player_id;
-					pthread_mutex_unlock(&mutex);
+					printf("Join response received\n");
+					int int_resp_player_id = response->int_player_id;
+
+					if (int_resp_player_id == 0)
+					{
+						// Server is full
+						printf("Unable to join: server is full\n");
+					}
+					else if (int_resp_player_id == -1)
+					{
+						// Name already taken - ask for another one and retry
+						printf("Name '%s' is already taken. Enter a different name (max %d chars): ",
+							str_my_name, MAX_NAME_LEN);
+						fflush(stdout);
+
+						pthread_mutex_lock(&mutex);
+						prompt_for_name(str_my_name);
+						strncpy(request.str_name, str_my_name, MAX_NAME_LEN);
+						request.str_name[MAX_NAME_LEN] = '\0';
+						pthread_mutex_unlock(&mutex);
+
+						printf("Trying to join as '%s'...\n", str_my_name);
+
+						// Force an immediate re-send of the join request
+						last_join_req_time = 0;
+					}
+					else
+					{
+						// printf("Join response player ID = %d\n", response->int_player_id);
+						pthread_mutex_lock(&mutex);
+						// Update player ID
+						int_player_id = int_resp_player_id;
+						pthread_mutex_unlock(&mutex);
+						printf("Joined as Player %d (%s)\n", int_resp_player_id, str_my_name);
+					}
 				}
 			}
 			else
@@ -248,7 +313,7 @@ void *worker(void *arg)
 				
 				// Send join request
 				rc = dds_write(join_writer, &request);
-				printf("Join request sent\n");
+				printf("Join request sent (name '%s')\n", request.str_name);
 				if (rc != DDS_RETCODE_OK)
 				{
 					DDS_FATAL("dds_write: %s\n", dds_strretcode(-rc));
@@ -305,6 +370,9 @@ void *worker(void *arg)
 			arr_Players[int_position_player_id-1].x = position->int_x;
 			// Set this player's y
 			arr_Players[int_position_player_id-1].y = position->int_y;
+			// Set this player's name
+			strncpy(arr_Players[int_position_player_id-1].str_name, position->str_name, MAX_NAME_LEN);
+			arr_Players[int_position_player_id-1].str_name[MAX_NAME_LEN] = '\0';
 			pthread_mutex_unlock(&mutex);
 		}
 	}
@@ -312,6 +380,13 @@ void *worker(void *arg)
 
 int main(void)
 {
+	// Ask for the player's name BEFORE anything else happens - this is
+	// what gets sent in the join request, so it must be known first.
+	printf("Enter your player name (max %d characters): ", MAX_NAME_LEN);
+	fflush(stdout);
+	prompt_for_name(str_my_name);
+	printf("Welcome, %s! Connecting to server...\n", str_my_name);
+
 	pthread_t thread;
 
     if (pthread_create(&thread, NULL, worker, NULL) != 0)
@@ -393,7 +468,7 @@ int main(void)
 		char str_banner[100] = "Waiting for server ...";
 		if (int_player_id != -1)
 		{
-			snprintf(str_banner, sizeof(str_banner), "Player %d", int_player_id);
+			snprintf(str_banner, sizeof(str_banner), "Player %d (%s)", int_player_id, str_my_name);
 		}
 		draw_text(320, 20, 3.0f, str_banner);
 		
@@ -402,13 +477,13 @@ int main(void)
 			pthread_mutex_lock(&mutex);
 			if(arr_Players[i].b_active == true)
 			{
-				// Label the player ID
-				char str_player[2] = "";
-				snprintf(str_player, sizeof(str_player), "%d", i+1);
+				// Label the player with their name
+				char str_label[MAX_NAME_LEN + 1];
+				snprintf(str_label, sizeof(str_label), "%s", arr_Players[i].str_name);
 				/* printf("Coords = %d, %d\n",arr_Players[i].x, arr_Players[i].y);				 */
 				/* draw_text(100, 400, 3.0f, str_banner); */
 				
-				draw_text(arr_Players[i].x, arr_Players[i].y, 3.0f, str_player);				
+				draw_text(arr_Players[i].x, arr_Players[i].y, 3.0f, str_label);				
 				
 				glBegin(GL_LINE_LOOP);
 					glVertex2f(arr_Players[i].x, arr_Players[i].y);

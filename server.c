@@ -7,7 +7,9 @@
 3. Start this server, then start client one by one
 4. Each client can see itself and all other clients
 5. Each client can move itself using the arrow keys
-6. Collision detection among all players and the window is supported */
+6. Collision detection among all players and the window is supported
+7. Each player must supply a unique (case-insensitive) name, max 8 chars;
+   duplicate names are rejected so the client can ask for another one */
 
 /* mutex lock/unlock must be matched
 watch out for break out of loop */
@@ -15,6 +17,7 @@ watch out for break out of loop */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
@@ -26,6 +29,8 @@ watch out for break out of loop */
 /* An array of one message (aka sample in dds terms) will be used. */
 #define MAX_SAMPLES 1
 #define MAX_PLAYERS 5
+
+#define MAX_NAME_LEN 8
 
 #define WIDTH  800
 #define HEIGHT 600
@@ -39,6 +44,7 @@ typedef struct
     bool b_active;
     int x;
     int y;
+    char str_name[MAX_NAME_LEN + 1];
 } Player;
 
 // ### GLOBAL VARIABLES ###
@@ -53,6 +59,12 @@ bool b_player_join = false;
 // 0 = Invalid player ID (unable to admit new players)
 // 1~MAX_PLAYERS = Valid player IDs
 int int_new_player_id = -1;
+
+// Name that goes with the join currently being processed (set by worker
+// when it accepts a join request as unique, read by main when it assigns
+// the ID, and read again by worker when it sends the response). Always
+// accessed under 'mutex'.
+char str_pending_name[MAX_NAME_LEN + 1] = {0};
 
 // Table to track clients
 // Init all members to 0
@@ -87,6 +99,20 @@ bool detect_collision(Player a_arr_players[], int a_int_arr_len,
 	}
 	
 	return b_res;
+}
+
+// Case-insensitive check for whether a_str_name is already in use by an
+// active player. Caller must hold 'mutex'.
+bool is_name_taken(const char *a_str_name)
+{
+	for (int i = 0; i < MAX_PLAYERS; i++)
+	{
+		if (arr_Players[i].b_active && strcasecmp(arr_Players[i].str_name, a_str_name) == 0)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 void *worker(void *arg)
@@ -227,11 +253,45 @@ void *worker(void *arg)
 		if ((rc > 0) && (infos_join[0].valid_data))
 		{
 			printf("Join request received\n");
-			// Signal the main thread to check if 
-			// number of active players reached
+
+			JoinRequest *request = (JoinRequest *) samples_join[0];
+			char str_req_name[MAX_NAME_LEN + 1];
+			strncpy(str_req_name, request->str_name, MAX_NAME_LEN);
+			str_req_name[MAX_NAME_LEN] = '\0';
+
 			pthread_mutex_lock(&mutex);
-			b_player_join = true;
+			bool b_taken = is_name_taken(str_req_name);
+			if (!b_taken)
+			{
+				// Stash the name for the main thread to store once it
+				// assigns an ID, and for us to echo back in the response.
+				strncpy(str_pending_name, str_req_name, MAX_NAME_LEN);
+				str_pending_name[MAX_NAME_LEN] = '\0';
+			}
 			pthread_mutex_unlock(&mutex);
+
+			if (b_taken)
+			{
+				// Reject right away - no need to involve the main thread.
+				response.int_player_id = -1;
+				strncpy(response.str_name, str_req_name, MAX_NAME_LEN);
+				response.str_name[MAX_NAME_LEN] = '\0';
+
+				rc = dds_write(response_writer, &response);
+				if (rc != DDS_RETCODE_OK)
+				{
+					DDS_FATAL("dds_write: %s\n", dds_strretcode(-rc));
+				}
+				printf("Name '%s' already taken - join rejected\n", str_req_name);
+			}
+			else
+			{
+				// Signal the main thread to check if
+				// number of active players reached
+				pthread_mutex_lock(&mutex);
+				b_player_join = true;
+				pthread_mutex_unlock(&mutex);
+			}
 		}
 		
 		// If a new player ID has been assigned by the main thread
@@ -244,9 +304,16 @@ void *worker(void *arg)
 			pthread_mutex_lock(&mutex);
 			// Reset the player ID
 			int_new_player_id = -1;
+			// Grab the name this join was for, to echo it in the response
+			char str_resp_name[MAX_NAME_LEN + 1];
+			strncpy(str_resp_name, str_pending_name, MAX_NAME_LEN);
+			str_resp_name[MAX_NAME_LEN] = '\0';
 			pthread_mutex_unlock(&mutex);
+
 			// The player ID can be 0, ie invalid
 			response.int_player_id = int_new_player_id_temp;
+			strncpy(response.str_name, str_resp_name, MAX_NAME_LEN);
+			response.str_name[MAX_NAME_LEN] = '\0';
 			
 			rc = dds_write(response_writer, &response);
 			if (rc != DDS_RETCODE_OK)
@@ -276,6 +343,8 @@ void *worker(void *arg)
 					position.int_player_id = i+1;
 					position.int_x = arr_Players[i].x;
 					position.int_y = arr_Players[i].y;
+					strncpy(position.str_name, arr_Players[i].str_name, MAX_NAME_LEN);
+					position.str_name[MAX_NAME_LEN] = '\0';
 					rc = dds_write(position_writer, &position);
 					if (rc != DDS_RETCODE_OK)
 					{
@@ -422,6 +491,10 @@ int main(void)
 						arr_Players[i].b_active = true;
 						// Increment the number of active players
 						int_num_active_players++;
+
+						// Record the name this player joined with
+						strncpy(arr_Players[i].str_name, str_pending_name, MAX_NAME_LEN);
+						arr_Players[i].str_name[MAX_NAME_LEN] = '\0';
 						
 						// Calculate initial coords of the new player
 						int int_rand_x = 0;

@@ -3,12 +3,14 @@
 struct JoinRequest
 {
 	boolean b_dummy;
+	char str_name[9];   // player name, max 8 chars + NUL
 };
 
 struct JoinResponse
 {
 	//IDL needs int width to be clearly defined
     long int_player_id;
+    char str_name[9];   // echoes the name this response is for
 };
 
 struct Input
@@ -22,4 +24,5 @@ struct Position
 	long int_player_id;
 	long int_x;
 	long int_y;
+	char str_name[9];   // player name, for display
 };
