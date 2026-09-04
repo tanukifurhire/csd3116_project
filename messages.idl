@@ -1,0 +1,25 @@
+//idlc -l c messages.idl
+
+struct JoinRequest
+{
+	boolean b_dummy;
+};
+
+struct JoinResponse
+{
+	//IDL needs int width to be clearly defined
+    long int_player_id;
+};
+
+struct Input
+{
+	long int_player_id;
+    char ch_direction;
+};
+
+struct Position
+{
+	long int_player_id;
+	long int_x;
+	long int_y;
+};
