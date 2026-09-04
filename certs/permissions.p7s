@@ -1,10 +1,14 @@
 MIME-Version: 1.0
-Content-Type: multipart/signed; protocol="application/x-pkcs7-signature"; micalg="sha-256"; boundary="----23C961EB0988202B0BCC4988555B2180"
+Content-Type: multipart/signed; protocol="application/x-pkcs7-signature"; micalg="sha-256"; boundary="----1C15EEA7AD5037F1BF406C88FD26746E"
 
 This is an S/MIME signed message
 
-------23C961EB0988202B0BCC4988555B2180
+------1C15EEA7AD5037F1BF406C88FD26746E
 Content-Type: text/plain
+
+<!-- 
+openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer certs/ca.pem -inkey certs/ca.key
+-->
 
 <?xml version="1.0" encoding="UTF-8"?>
 <dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -29,6 +33,7 @@ Content-Type: text/plain
         <subscribe>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </subscribe>
@@ -48,6 +53,7 @@ Content-Type: text/plain
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -61,7 +67,7 @@ Content-Type: text/plain
       <default>DENY</default>
     </grant>
 
-     <!-- CLIENT 2: publishes requests/input, subscribes to responses/positions -->
+    <!-- CLIENT 2: publishes requests/input, subscribes to responses/positions -->
     <grant name="client2_permissions">
       <subject_name>CN=client2,O=CSD3116Project</subject_name>
       <validity>
@@ -73,6 +79,7 @@ Content-Type: text/plain
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -86,7 +93,7 @@ Content-Type: text/plain
       <default>DENY</default>
     </grant>
 
-     <!-- CLIENT 3: publishes requests/input, subscribes to responses/positions -->
+    <!-- CLIENT 3: publishes requests/input, subscribes to responses/positions -->
     <grant name="client3_permissions">
       <subject_name>CN=client3,O=CSD3116Project</subject_name>
       <validity>
@@ -98,6 +105,7 @@ Content-Type: text/plain
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -111,7 +119,7 @@ Content-Type: text/plain
       <default>DENY</default>
     </grant>
 
-     <!-- CLIENT 4: publishes requests/input, subscribes to responses/positions -->
+    <!-- CLIENT 4: publishes requests/input, subscribes to responses/positions -->
     <grant name="client4_permissions">
       <subject_name>CN=client4,O=CSD3116Project</subject_name>
       <validity>
@@ -123,6 +131,33 @@ Content-Type: text/plain
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+    
+    <!-- CLIENT 5: publishes requests/input, subscribes to responses/positions -->
+    <grant name="client5_permissions">
+      <subject_name>CN=client5,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -148,7 +183,7 @@ Content-Type: text/plain
   </permissions>
 </dds>
 
-------23C961EB0988202B0BCC4988555B2180
+------1C15EEA7AD5037F1BF406C88FD26746E
 Content-Type: application/x-pkcs7-signature; name="smime.p7s"
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename="smime.p7s"
@@ -175,16 +210,16 @@ j3d4pW+GSMwdmjapuUkw6cExGmtHFgC+eQiA3bpQtSiEP3Z8meSDMYICXTCCAlkC
 AQEwSzAzMRcwFQYDVQQKDA5DU0QzMTE2UHJvamVjdDEYMBYGA1UEAwwPRERTIElk
 ZW50aXR5IENBAhQtLmLhQ3TpHBqLeszKTIwTlEg5ITANBglghkgBZQMEAgEFAKCB
 5DAYBgkqhkiG9w0BCQMxCwYJKoZIhvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNjA5
-MDQxMDQyMjZaMC8GCSqGSIb3DQEJBDEiBCAtFf450/gC8cDKWD/kMNNEszOxcQCI
-0iUdAU1YIRGs9TB5BgkqhkiG9w0BCQ8xbDBqMAsGCWCGSAFlAwQBKjALBglghkgB
+MDQxNjQ5NDhaMC8GCSqGSIb3DQEJBDEiBCB5sa8o1HVbovEuMe8e+e0fFWT42E4H
+kKPBDDr31jZBsDB5BgkqhkiG9w0BCQ8xbDBqMAsGCWCGSAFlAwQBKjALBglghkgB
 ZQMEARYwCwYJYIZIAWUDBAECMAoGCCqGSIb3DQMHMA4GCCqGSIb3DQMCAgIAgDAN
 BggqhkiG9w0DAgIBQDAHBgUrDgMCBzANBggqhkiG9w0DAgIBKDANBgkqhkiG9w0B
-AQEFAASCAQCRM8ZpkE4Uc4ZDdekNvh7GPCOSchMIlztSJhxOT/rHOBzkDtsKeLYG
-LSCWKGhBcnTGdBIniCMv6RF+A+G7JOhUdqNmOpY9iWR4meO+lBHVTMQQcqeKYv2w
-Pzns/R8cT+OlimrUk/Sst1w51oBXnlGFjgACcpkn2VMmA9yj6VabayLvP8k1DblH
-7zd2p9y/hZVDgkvs1yq4WTJeZ/rZVR8UMKNoXI2844KbNoAGJ9VzBI4vZDvrPAKk
-PK3In3G38SP0LyWOTCZIyaVuMMjXgBTtYVHwJHUSLCcod+DBwaxvphpyAHMUPOFh
-0hlZVu5yYU2eMOkuyLO6iDhZF5ADRHOT
+AQEFAASCAQBzjra3CQvGy29eJYpSQKk98c0wKA8JZO57MfLMB9NGf6FQzYtOeETX
+M3xHyZs/sh5WD0OG299NdyHHI+ld057+ooPpcNaiYkSKsyUBz4oVBvDlVjZzMLXF
+BYEX8jP6K5UtulVe8Nby0gN8jjc7odtCUitCiAKXyaUv8ErPpnqgFu2m9hyAh90z
+pIE5UkFzikNmXpuT0e3vjTqr1zpqkBAjBZOgtnty5rNA/SoKW2aVxj6C6EDDLE+u
+R3++P+mHMKhDYWduwFvFd6Fv4Zq62nWVdsPBDQ0Go1D/xlnYxLCmHks3ywlkJ9FB
+KDpYDKUOJdFeu5iJC/lK4aq7H6WLnuve
 
-------23C961EB0988202B0BCC4988555B2180--
+------1C15EEA7AD5037F1BF406C88FD26746E--
 

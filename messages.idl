@@ -2,27 +2,41 @@
 
 struct JoinRequest
 {
-	boolean b_dummy;
-	char str_name[9];   // player name, max 8 chars + NUL
+    boolean b_dummy;
+    char str_name[9];
+    char str_identity[32];
 };
 
 struct JoinResponse
 {
-	//IDL needs int width to be clearly defined
     long int_player_id;
-    char str_name[9];   // echoes the name this response is for
+
+    /*
+        >0 = success
+         0 = server full
+        -1 = name taken
+        -2 = identity already logged in
+    */
+    char str_name[9];
 };
 
 struct Input
 {
-	long int_player_id;
+    long int_player_id;
     char ch_direction;
 };
 
 struct Position
 {
-	long int_player_id;
-	long int_x;
-	long int_y;
-	char str_name[9];   // player name, for display
+    long int_player_id;
+    long int_x;
+    long int_y;
+	boolean b_active;
+    char str_name[9];
+};
+
+struct LeaveRequest
+{
+    long int_player_id;
+    char str_identity[32];
 };

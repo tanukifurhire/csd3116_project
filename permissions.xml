@@ -25,6 +25,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
         <subscribe>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </subscribe>
@@ -44,6 +45,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -57,7 +59,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
       <default>DENY</default>
     </grant>
 
-     <!-- CLIENT 2: publishes requests/input, subscribes to responses/positions -->
+    <!-- CLIENT 2: publishes requests/input, subscribes to responses/positions -->
     <grant name="client2_permissions">
       <subject_name>CN=client2,O=CSD3116Project</subject_name>
       <validity>
@@ -69,6 +71,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -82,7 +85,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
       <default>DENY</default>
     </grant>
 
-     <!-- CLIENT 3: publishes requests/input, subscribes to responses/positions -->
+    <!-- CLIENT 3: publishes requests/input, subscribes to responses/positions -->
     <grant name="client3_permissions">
       <subject_name>CN=client3,O=CSD3116Project</subject_name>
       <validity>
@@ -94,6 +97,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
@@ -107,7 +111,7 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
       <default>DENY</default>
     </grant>
 
-     <!-- CLIENT 4: publishes requests/input, subscribes to responses/positions -->
+    <!-- CLIENT 4: publishes requests/input, subscribes to responses/positions -->
     <grant name="client4_permissions">
       <subject_name>CN=client4,O=CSD3116Project</subject_name>
       <validity>
@@ -119,6 +123,33 @@ openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer
         <publish>
           <topics>
             <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+    
+    <!-- CLIENT 5: publishes requests/input, subscribes to responses/positions -->
+    <grant name="client5_permissions">
+      <subject_name>CN=client5,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>LeaveRequest</topic>
             <topic>Input</topic>
           </topics>
         </publish>
