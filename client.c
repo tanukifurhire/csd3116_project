@@ -13,6 +13,7 @@
 
 #include <GLFW/glfw3.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <pthread.h>
@@ -57,6 +58,10 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 // and possibly updated by the worker thread itself if the name is taken -
 // never touched concurrently by two threads at once)
 char str_my_name[MAX_NAME_LEN + 1] = {0};
+
+// Which certs/clientN.pem + clientN.key this instance authenticates as.
+// Set from argv[1] in main() before the worker thread starts (e.g. "1").
+char str_client_id[4] = "1";
 
 void draw_text(float x, float y, float scale, const char *text)
 {
@@ -109,6 +114,68 @@ void prompt_for_name(char *out_name)
     }
 }
 
+// ------------------------------------------------------------------
+// DDS Security: creates a participant configured with the Authentication,
+// Access Control, and Cryptographic plugins.
+// ------------------------------------------------------------------
+static char *file_uri(const char *path)
+{
+    size_t len = strlen(path) + 6; /* "file:" + path + NUL */
+    char *uri = malloc(len);
+    snprintf(uri, len, "file:%s", path);
+    return uri;
+}
+
+dds_entity_t create_secure_participant(
+    const char *identity_ca_path,
+    const char *identity_cert_path,
+    const char *private_key_path,
+    const char *governance_path,
+    const char *permissions_path)
+{
+    dds_qos_t *qos = dds_create_qos();
+
+    char *identity_ca    = file_uri(identity_ca_path);
+    char *identity_cert  = file_uri(identity_cert_path);
+    char *private_key    = file_uri(private_key_path);
+    char *permissions_ca = file_uri(identity_ca_path); /* same CA reused */
+    char *governance     = file_uri(governance_path);
+    char *permissions    = file_uri(permissions_path);
+
+    /* --- Authentication plugin --- */
+    dds_qset_prop(qos, "dds.sec.auth.identity_ca", identity_ca);
+    dds_qset_prop(qos, "dds.sec.auth.identity_certificate", identity_cert);
+    dds_qset_prop(qos, "dds.sec.auth.private_key", private_key);
+    dds_qset_prop(qos, "dds.sec.auth.library.path", "dds_security_auth");
+    dds_qset_prop(qos, "dds.sec.auth.library.init", "init_authentication");
+    dds_qset_prop(qos, "dds.sec.auth.library.finalize", "finalize_authentication");
+
+    /* --- Access Control plugin --- */
+    dds_qset_prop(qos, "dds.sec.access.permissions_ca", permissions_ca);
+    dds_qset_prop(qos, "dds.sec.access.governance", governance);
+    dds_qset_prop(qos, "dds.sec.access.permissions", permissions);
+    dds_qset_prop(qos, "dds.sec.access.library.path", "dds_security_ac");
+    dds_qset_prop(qos, "dds.sec.access.library.init", "init_access_control");
+    dds_qset_prop(qos, "dds.sec.access.library.finalize", "finalize_access_control");
+
+    /* --- Cryptographic plugin --- */
+    dds_qset_prop(qos, "dds.sec.crypto.library.path", "dds_security_crypto");
+    dds_qset_prop(qos, "dds.sec.crypto.library.init", "init_crypto");
+    dds_qset_prop(qos, "dds.sec.crypto.library.finalize", "finalize_crypto");
+
+    dds_entity_t participant = dds_create_participant(DDS_DOMAIN_DEFAULT, qos, NULL);
+
+    dds_delete_qos(qos);
+    free(identity_ca);
+    free(identity_cert);
+    free(private_key);
+    free(permissions_ca);
+    free(governance);
+    free(permissions);
+
+    return participant;
+}
+
 void *worker(void *arg)
 {
 	dds_entity_t participant;
@@ -132,17 +199,23 @@ void *worker(void *arg)
     /* Create participant                                    */
     /* ----------------------------------------------------- */
 
-    participant = dds_create_participant
-	(
-        DDS_DOMAIN_DEFAULT,
-        NULL,
-        NULL
+    char str_cert_path[64];
+    char str_key_path[64];
+    snprintf(str_cert_path, sizeof(str_cert_path), "certs/client%s.pem", str_client_id);
+    snprintf(str_key_path, sizeof(str_key_path), "certs/client%s.key", str_client_id);
+
+    participant = create_secure_participant(
+        "certs/ca.pem",
+        str_cert_path,
+        str_key_path,
+        "certs/governance.p7s",
+        "certs/permissions.p7s"
     );
 
     if (participant < 0)
     {
-        printf("Failed to create participant\n");
-        //return 1;
+        printf("Failed to create participant: %s\n", dds_strretcode(-participant));
+        return NULL;
     }
 
     /* ----------------------------------------------------- */
@@ -378,8 +451,17 @@ void *worker(void *arg)
 	}
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+	// Which client cert (certs/clientN.pem / clientN.key) this instance
+	// authenticates as. Defaults to "1" if not given on the command line.
+	if (argc > 1)
+	{
+		strncpy(str_client_id, argv[1], sizeof(str_client_id) - 1);
+		str_client_id[sizeof(str_client_id) - 1] = '\0';
+	}
+	printf("Using certs/client%s.pem for authentication\n", str_client_id);
+
 	// Ask for the player's name BEFORE anything else happens - this is
 	// what gets sent in the join request, so it must be known first.
 	printf("Enter your player name (max %d characters): ", MAX_NAME_LEN);

@@ -1,0 +1,145 @@
+<!-- 
+openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer certs/ca.pem -inkey certs/ca.key
+-->
+
+<?xml version="1.0" encoding="UTF-8"?>
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:noNamespaceSchemaLocation="omg_shared_ca_permissions.xsd">
+  <permissions>
+
+    <!-- SERVER: publishes responses/positions, subscribes to requests/input -->
+    <grant name="server_permissions">
+      <subject_name>CN=server,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+
+    <!-- CLIENT 1: publishes requests/input, subscribes to responses/positions -->
+    <grant name="client1_permissions">
+      <subject_name>CN=client1,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+
+     <!-- CLIENT 2: publishes requests/input, subscribes to responses/positions -->
+    <grant name="client2_permissions">
+      <subject_name>CN=client2,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+
+     <!-- CLIENT 3: publishes requests/input, subscribes to responses/positions -->
+    <grant name="client3_permissions">
+      <subject_name>CN=client3,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+
+     <!-- CLIENT 4: publishes requests/input, subscribes to responses/positions -->
+    <grant name="client4_permissions">
+      <subject_name>CN=client4,O=CSD3116Project</subject_name>
+      <validity>
+        <not_before>2026-01-01T00:00:00</not_before>
+        <not_after>2030-01-01T00:00:00</not_after>
+      </validity>
+      <allow_rule>
+        <domains><id>0</id></domains>
+        <publish>
+          <topics>
+            <topic>JoinRequest</topic>
+            <topic>Input</topic>
+          </topics>
+        </publish>
+        <subscribe>
+          <topics>
+            <topic>JoinResponse</topic>
+            <topic>Position</topic>
+          </topics>
+        </subscribe>
+      </allow_rule>
+      <default>DENY</default>
+    </grant>
+
+    <!-- Copy the block above for client2 .. client5, changing the grant
+         name and subject_name each time, e.g.:
+
+    <grant name="client2_permissions">
+      <subject_name>CN=client2,O=CSD3116Project</subject_name>
+      ... (same validity/allow_rule/default as above) ...
+    </grant>
+    -->
+
+  </permissions>
+</dds>
