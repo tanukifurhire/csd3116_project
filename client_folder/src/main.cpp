@@ -10,6 +10,12 @@ Client client;
 
 int main()
 {
-    client.Init();
+    if (!client.Init())
+    {
+        return 1;
+    }
+
+    client.Run();
+    client.Shutdown();
     return 0;
 }

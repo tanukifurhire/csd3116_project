@@ -9,6 +9,11 @@ CXXFLAGS = -std=c++17 -Wall
 
 GLFW_CFLAGS    = $(shell pkg-config --cflags glfw3)
 GLFW_LIBS      = $(shell pkg-config --libs glfw3)
+# GLEW loads the OpenGL 3.3 core entry points (shaders, VAOs, VBOs) that libGL
+# does not export directly. Only the C++ client needs it; client.c still uses
+# the fixed-function pipeline.
+GLEW_CFLAGS    = $(shell pkg-config --cflags glew)
+GLEW_LIBS      = $(shell pkg-config --libs glew)
 DDS_CFLAGS     = $(shell pkg-config --cflags CycloneDDS)
 DDS_LIBS       = $(shell pkg-config --libs CycloneDDS)
 OPENSSL_CFLAGS = $(shell pkg-config --cflags libcrypto)
@@ -17,7 +22,8 @@ OPENSSL_LIBS   = $(shell pkg-config --libs libcrypto)
 # C++ port of client/server, built alongside the existing C client/server
 # while the port is in progress (see docs/NETWORKING.md). 'make all' does
 # NOT build these yet -- run 'make cpp' explicitly.
-CLIENT_CPP_SRC = client_folder/src/main.cpp client_folder/src/client.cpp
+CLIENT_CPP_SRC = client_folder/src/main.cpp client_folder/src/client.cpp \
+                 client_folder/src/renderer.cpp
 SERVER_CPP_SRC = server_folder/src/main.cpp server_folder/src/server.cpp
 
 N ?= 1
@@ -62,9 +68,10 @@ messages.o: messages.c messages.h
 auth.o: auth.c auth.h
 	$(CC) -c auth.c -o auth.o $(OPENSSL_CFLAGS)
 
-client_cpp: $(CLIENT_CPP_SRC) client_folder/include/client.h messages.o
+client_cpp: $(CLIENT_CPP_SRC) client_folder/include/client.h client_folder/include/renderer.h messages.o
 	$(CXX) $(CXXFLAGS) -o client_cpp $(CLIENT_CPP_SRC) messages.o \
-		$(GLFW_CFLAGS) $(GLFW_LIBS) -lGL $(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm
+		$(GLEW_CFLAGS) $(GLFW_CFLAGS) $(GLEW_LIBS) $(GLFW_LIBS) -lGL \
+		$(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm
 
 server_cpp: $(SERVER_CPP_SRC) server_folder/include/server.h messages.o auth.o
 	$(CXX) $(CXXFLAGS) -o server_cpp $(SERVER_CPP_SRC) messages.o auth.o \

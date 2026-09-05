@@ -40,7 +40,14 @@ Run all of these inside WSL2 (Ubuntu), not in Windows.
    sudo apt install libglfw3-dev
    ```
 
-5. **Cyclone DDS** [2] shall be used for all networking — install with:
+5. **Install GLEW.** The C++ client renders with the OpenGL 3.3 core profile
+   (shaders, VAOs, VBOs); those entry points are not exported by libGL directly
+   and GLEW [3] loads them at runtime.
+   ```bash
+   sudo apt install libglew-dev
+   ```
+
+6. **Cyclone DDS** [2] shall be used for all networking — install with:
    ```bash
    sudo apt update
    sudo apt install -y cyclonedds-dev cyclonedds-tools
@@ -49,7 +56,7 @@ Run all of these inside WSL2 (Ubuntu), not in Windows.
    makefile looks up via `pkg-config`; `cyclonedds-tools` provides `idlc`, the
    IDL compiler that turns `messages.idl` into `messages.c`/`messages.h`.
 
-6. **Install the OpenSSL development headers.** The server hashes player
+7. **Install the OpenSSL development headers.** The server hashes player
    passwords with OpenSSL, and the DDS Security plugins need it too.
    ```bash
    sudo apt install libssl-dev
@@ -60,12 +67,14 @@ To confirm everything is in place before building:
 idlc --version
 pkg-config --exists CycloneDDS && echo "CycloneDDS OK"
 pkg-config --exists glfw3 && echo "GLFW OK"
+pkg-config --exists glew && echo "GLEW OK"
 ```
 
 ### References
 
 - [1] GLFW — https://www.glfw.org/
 - [2] Eclipse Cyclone DDS — https://cyclonedds.io/
+- [3] GLEW — https://glew.sourceforge.net/
 
 ## Run
 
