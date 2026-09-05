@@ -5,6 +5,7 @@ struct JoinRequest
     boolean b_dummy;
     char str_name[9];
     char str_identity[32];
+    char str_password[65];
 };
 
 struct JoinResponse
@@ -16,6 +17,7 @@ struct JoinResponse
          0 = server full
         -1 = name taken
         -2 = identity already logged in
+        -3 = wrong password
     */
     char str_name[9];
 };

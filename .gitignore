@@ -18,3 +18,8 @@ certs/*.pem
 certs/*.p7s
 certs/*.csr
 certs/*.srl
+
+# ============================
+# Server-side account data (salted password hashes, not source)
+# ============================
+players.auth

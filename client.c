@@ -18,6 +18,7 @@
 #include <strings.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <termios.h>
 #include "dds/dds.h"
 #include "messages.h"
 #include "stb_easy_font.h"
@@ -60,6 +61,11 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 // and possibly updated by the worker thread itself if the name is taken -
 // never touched concurrently by two threads at once)
 char str_my_name[MAX_NAME_LEN + 1] = {0};
+
+// Application-layer login password for str_my_name - proves to the server
+// WHO is playing, independent of which shared DDS client cert is in use.
+// Same single-writer-at-a-time rule as str_my_name.
+char str_my_password[65] = {0};
 
 // Which certs/clientN.pem + clientN.key this instance authenticates as.
 // Set from argv[1] in main() before the worker thread starts (e.g. "1").
@@ -113,6 +119,42 @@ void prompt_for_name(char *out_name)
 	{
 		strcpy(out_name, "Player");
 	}
+}
+
+// Prompt on stdin for a password with terminal echo disabled, truncate to
+// out_len - 1 chars, strip newline. Restores echo before returning even if
+// reading fails.
+void prompt_for_password(char *out_password, size_t out_len)
+{
+	struct termios old_term, new_term;
+	bool b_have_term = (tcgetattr(STDIN_FILENO, &old_term) == 0);
+
+	if (b_have_term)
+	{
+		new_term = old_term;
+		new_term.c_lflag &= ~ECHO;
+		new_term.c_lflag |= ECHONL;
+		tcsetattr(STDIN_FILENO, TCSANOW, &new_term);
+	}
+
+	char str_input[128];
+
+	if (fgets(str_input, sizeof(str_input), stdin) != NULL)
+	{
+		str_input[strcspn(str_input, "\n")] = '\0';
+	}
+	else
+	{
+		str_input[0] = '\0';
+	}
+
+	if (b_have_term)
+	{
+		tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
+	}
+
+	strncpy(out_password, str_input, out_len - 1);
+	out_password[out_len - 1] = '\0';
 }
 
 // ------------------------------------------------------------------
@@ -305,6 +347,8 @@ void *worker(void *arg)
 	strncpy(request.str_identity, g_identity, sizeof(request.str_identity) - 1);
 	request.str_identity[sizeof(request.str_identity) - 1] = '\0';
 	snprintf(request.str_identity, sizeof(request.str_identity), "client%s", str_client_id);
+	strncpy(request.str_password, str_my_password, sizeof(request.str_password) - 1);
+	request.str_password[sizeof(request.str_password) - 1] = '\0';
 
 	/* Initialize sample buffer, by pointing the void pointer within
 	 * the buffer array to a valid sample memory location. */
@@ -369,6 +413,24 @@ void *worker(void *arg)
 						printf(
 							"This DDS certificate "
 							"is already connected.\n");
+					}
+					else if (int_resp_player_id == -3)
+					{
+						// Wrong password for this (existing) username - retry
+						printf("Wrong password for '%s'. Enter password again: ",
+							   str_my_name);
+						fflush(stdout);
+
+						pthread_mutex_lock(&mutex);
+						prompt_for_password(str_my_password, sizeof(str_my_password));
+						strncpy(request.str_password, str_my_password, sizeof(request.str_password) - 1);
+						request.str_password[sizeof(request.str_password) - 1] = '\0';
+						pthread_mutex_unlock(&mutex);
+
+						printf("Trying to join as '%s'...\n", str_my_name);
+
+						// Force an immediate re-send of the join request
+						last_join_req_time = 0;
 					}
 					else
 					{
@@ -499,6 +561,14 @@ int main(int argc, char *argv[])
 	printf("Enter your player name (max %d characters): ", MAX_NAME_LEN);
 	fflush(stdout);
 	prompt_for_name(str_my_name);
+
+	// Password proves WHO is playing at the application layer (a new name
+	// registers it, an existing name must match). Sent over the JoinRequest
+	// topic, which governance.xml already marks ENCRYPT under DDS Security.
+	printf("Enter password for '%s': ", str_my_name);
+	fflush(stdout);
+	prompt_for_password(str_my_password, sizeof(str_my_password));
+
 	printf("Welcome, %s! DDS identity = client%s\n", str_my_name, str_client_id);
 
 	pthread_t thread;

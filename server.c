@@ -24,6 +24,7 @@ watch out for break out of loop */
 
 #include "dds/dds.h"
 #include "messages.h"
+#include "auth.h"
 
 // ### GLOBAL CONSTANTS ###
 /* An array of one message (aka sample in dds terms) will be used. */
@@ -347,6 +348,10 @@ void *worker(void *arg)
 			strncpy(str_req_name, request->str_name, MAX_NAME_LEN);
 			str_req_name[MAX_NAME_LEN] = '\0';
 
+			char str_req_password[65];
+			strncpy(str_req_password, request->str_password, sizeof(str_req_password) - 1);
+			str_req_password[sizeof(str_req_password) - 1] = '\0';
+
 			bool b_name_taken;
 			bool b_identity_taken;
 
@@ -355,8 +360,22 @@ void *worker(void *arg)
 			b_name_taken = is_name_taken(str_req_name);
 			b_identity_taken = is_identity_taken(request->str_identity);
 
+			pthread_mutex_unlock(&mutex);
+
+			// Only spend time hashing/verifying credentials if the join
+			// would otherwise be accepted (real auth check, independent
+			// of which DDS client cert the connection presented).
+			AuthResult auth_result = AUTH_OK;
 			if (!b_name_taken && !b_identity_taken)
 			{
+				auth_result = auth_authenticate(str_req_name, str_req_password);
+			}
+			memset(str_req_password, 0, sizeof(str_req_password));
+
+			if (!b_name_taken && !b_identity_taken && auth_result == AUTH_OK)
+			{
+				pthread_mutex_lock(&mutex);
+
 				strncpy(str_pending_name,
 						str_req_name,
 						MAX_NAME_LEN);
@@ -368,9 +387,9 @@ void *worker(void *arg)
 						sizeof(str_pending_identity) - 1);
 
 				str_pending_identity[sizeof(str_pending_identity) - 1] = '\0';
-			}
 
-			pthread_mutex_unlock(&mutex);
+				pthread_mutex_unlock(&mutex);
+			}
 
 			if (b_identity_taken)
 			{
@@ -414,6 +433,28 @@ void *worker(void *arg)
 				}
 
 				printf("Name '%s' already taken - join rejected\n",
+					   str_req_name);
+			}
+			else if (auth_result != AUTH_OK)
+			{
+				response.int_player_id = -3;
+
+				strncpy(response.str_name,
+						str_req_name,
+						MAX_NAME_LEN);
+
+				response.str_name[MAX_NAME_LEN] = '\0';
+
+				rc = dds_write(response_writer,
+							   &response);
+
+				if (rc != DDS_RETCODE_OK)
+				{
+					DDS_FATAL("dds_write: %s\n",
+							  dds_strretcode(-rc));
+				}
+
+				printf("Wrong password for '%s' - join rejected\n",
 					   str_req_name);
 			}
 			else
@@ -623,6 +664,12 @@ int main(void)
 {
 	// Seed rand(), so that the random numbers are different for each run
 	srand((unsigned int)time(NULL));
+
+	if (!auth_init("players.auth"))
+	{
+		fprintf(stderr, "Failed to open/create players.auth\n");
+		return 1;
+	}
 
 	pthread_t thread;
 
