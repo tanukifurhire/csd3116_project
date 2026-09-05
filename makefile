@@ -8,7 +8,7 @@ N ?= 1
 
 .PHONY: all clean run certs
 
-all: server client
+all: server client certs
 
 $(IDL_GEN): $(IDL_SRC)
 	$(IDLC) -l c $(IDL_SRC)

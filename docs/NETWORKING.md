@@ -354,7 +354,49 @@ expressed as a class boundary.
 
 ---
 
-## 9. Quick reference: files to touch for common changes
+## 9. Testing remote (non-LAN) connections
+
+Nothing in this repo sets CycloneDDS's discovery config — `dds_create_participant(DDS_DOMAIN_DEFAULT, qos, NULL)` (server.c:207, client.c:209) is called with no config beyond the security QoS — so both programs fall back to Cyclone's built-in default: SPDP discovery via UDP **multicast** (§5). That works on a LAN/WiFi with zero setup, but multicast essentially never crosses routers/NAT, so a `server` and `client` on different networks won't discover each other unmodified.
+
+Two ways to fix that, neither touching any `.c`/`.h`/`.idl` file:
+
+### Option A — unicast peer list (works over the open internet)
+
+Point Cyclone at an explicit peer address instead of relying on multicast:
+
+```xml
+<!-- cyclonedds.xml -->
+<CycloneDDS>
+  <Domain>
+    <General>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <Peers>
+        <Peer address="myserver.ddns.net"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
+```
+
+Set `CYCLONEDDS_URI=file:///path/to/cyclonedds.xml` in the environment before launching `server`/`client` — Cyclone reads it at participant creation, so it must be set before the process starts; there's no in-code equivalent to add.
+
+`Peer address` accepts a hostname (Cyclone resolves it via normal DNS at participant-creation time), so a dynamic-DNS name pointing at a rotating home IP works fine there. One caveat: that resolution happens **once**, at startup — Cyclone doesn't re-poll DNS afterward, so if the DDNS record changes mid-session the already-running client won't follow it; restart the client to force a fresh lookup.
+
+Reachability, not just addressing, is the other half of this:
+
+- Only the side other peers dial *first* needs a forwarded/open port. In this app that's the server: clients discover it via `Peer address`, and the server then learns each client's address from the packets it receives — so on an ordinary (non-symmetric) NAT, clients don't need any inbound rule of their own.
+- The forwarded external port has to match the port Cyclone actually binds internally (or set `General/ExternalNetworkAddress`/`ExternalMaskedNetworkAddress` in the config) — otherwise Cyclone keeps advertising its private LAN address to peers and the port-forward doesn't help.
+- Symmetric NAT or a strict corporate firewall on the client side can still break the "client needs nothing" assumption; if that happens, either forward on both ends or use Option B.
+
+### Option B — VPN overlay (Tailscale/WireGuard)
+
+Put the server and client machines on the same virtual subnet. Multicast/broadcast discovery then works completely unmodified — from Cyclone's point of view it's just a LAN — so this needs no config file and no `CYCLONEDDS_URI` at all. Faster to get working for a one-off test, but less representative of what a real internet deployment needs (Option A's NAT/port-forwarding issues are exactly what you'd hit deploying for real).
+
+---
+
+## 10. Quick reference: files to touch for common changes
 
 | You want to... | Touch |
 |---|---|
@@ -363,4 +405,5 @@ expressed as a class boundary.
 | Add new application/game logic (auth-like) | a new `.c`/`.h` (or C++ class) called from `worker()`, never inlined into the DDS poll loop (§7) |
 | Change transport security (certs, encryption, access rules) | `governance.xml`, `permissions.xml`, `gen_certs.sh`, `certs/` — untouched by anything in §1-§8 |
 | Replace polling with push callbacks | swap `dds_take`-in-a-loop for `dds_set_listener`/`dds_lset_data_available` per reader (§5) |
+| Test server/client across different networks, not just LAN | `CYCLONEDDS_URI` env var + a `cyclonedds.xml` (unicast `Peers`, §9) — or a VPN overlay; no repo files change |
 | Replace the renderer | `client.c`'s GLFW/OpenGL block only (client.c:74-98, 582-680) + `stb_easy_font.h`; the DDS `worker()` function needs no changes |
