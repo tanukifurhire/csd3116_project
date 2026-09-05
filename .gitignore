@@ -9,6 +9,9 @@ messages.h
 # ============================
 client
 server
+client_cpp
+server_cpp
+*.o
 
 # ============================
 # Generated certs/policy files
