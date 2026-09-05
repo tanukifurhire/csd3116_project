@@ -69,6 +69,14 @@ int int_new_player_id = -1;
 char str_pending_name[MAX_NAME_LEN + 1] = {0};
 char str_pending_identity[32] = {0};
 
+// Name of whichever player int_new_player_id refers to, set by main at the
+// exact moment it assigns the ID. Kept separate from str_pending_name
+// because that buffer can be overwritten by the worker thread accepting a
+// *different* join before this admission's response has been sent - using
+// str_pending_name here would risk echoing the wrong player's name back
+// with this player's ID. Always accessed under 'mutex'.
+char str_admitted_name[MAX_NAME_LEN + 1] = {0};
+
 // Table to track clients
 // Init all members to 0
 static Player arr_Players[MAX_PLAYERS] = {0};
@@ -131,6 +139,20 @@ bool is_name_taken(const char *a_str_name)
 		}
 	}
 	return false;
+}
+
+// Returns the 1-based player ID of the currently-active player using
+// 'identity', or -1 if none. Caller must hold 'mutex'.
+int find_active_player_id_by_identity(const char *identity)
+{
+	for (int i = 0; i < MAX_PLAYERS; i++)
+	{
+		if (arr_Players[i].b_active && strcmp(arr_Players[i].str_identity, identity) == 0)
+		{
+			return i + 1;
+		}
+	}
+	return -1;
 }
 
 // ------------------------------------------------------------------
@@ -348,122 +370,156 @@ void *worker(void *arg)
 			strncpy(str_req_name, request->str_name, MAX_NAME_LEN);
 			str_req_name[MAX_NAME_LEN] = '\0';
 
-			char str_req_password[65];
-			strncpy(str_req_password, request->str_password, sizeof(str_req_password) - 1);
-			str_req_password[sizeof(str_req_password) - 1] = '\0';
-
-			bool b_name_taken;
-			bool b_identity_taken;
-
+			// JoinResponse is best-effort DDS (dropped samples are not
+			// retransmitted), so a client that never saw its own success response
+			// keeps resending the same JoinRequest. If that request now looks like
+			// "identity already connected" only because OUR OWN earlier accept
+			// went unseen, just re-send the original confirmation instead of
+			// rejecting a client that, from its own point of view, never joined.
 			pthread_mutex_lock(&mutex);
-
-			b_name_taken = is_name_taken(str_req_name);
-			b_identity_taken = is_identity_taken(request->str_identity);
-
+			int int_existing_player_id = find_active_player_id_by_identity(request->str_identity);
+			bool b_is_resend_of_own_join =
+				(int_existing_player_id > 0 &&
+				 strcasecmp(arr_Players[int_existing_player_id - 1].str_name, str_req_name) == 0);
 			pthread_mutex_unlock(&mutex);
 
-			// Only spend time hashing/verifying credentials if the join
-			// would otherwise be accepted (real auth check, independent
-			// of which DDS client cert the connection presented).
-			AuthResult auth_result = AUTH_OK;
-			if (!b_name_taken && !b_identity_taken)
+			if (b_is_resend_of_own_join)
 			{
-				auth_result = auth_authenticate(str_req_name, str_req_password);
-			}
-			memset(str_req_password, 0, sizeof(str_req_password));
+				response.int_player_id = int_existing_player_id;
 
-			if (!b_name_taken && !b_identity_taken && auth_result == AUTH_OK)
-			{
-				pthread_mutex_lock(&mutex);
-
-				strncpy(str_pending_name,
-						str_req_name,
-						MAX_NAME_LEN);
-
-				str_pending_name[MAX_NAME_LEN] = '\0';
-
-				strncpy(str_pending_identity,
-						request->str_identity,
-						sizeof(str_pending_identity) - 1);
-
-				str_pending_identity[sizeof(str_pending_identity) - 1] = '\0';
-
-				pthread_mutex_unlock(&mutex);
-			}
-
-			if (b_identity_taken)
-			{
-				response.int_player_id = -2;
-
-				strncpy(response.str_name,
-						str_req_name,
-						MAX_NAME_LEN);
-
+				strncpy(response.str_name, str_req_name, MAX_NAME_LEN);
 				response.str_name[MAX_NAME_LEN] = '\0';
 
-				rc = dds_write(response_writer,
-							   &response);
+				rc = dds_write(response_writer, &response);
 
 				if (rc != DDS_RETCODE_OK)
 				{
-					DDS_FATAL("dds_write: %s\n",
-							  dds_strretcode(-rc));
+					DDS_FATAL("dds_write: %s\n", dds_strretcode(-rc));
 				}
 
-				printf("Identity '%s' already connected\n",
-					   request->str_identity);
-			}
-			else if (b_name_taken)
-			{
-				response.int_player_id = -1;
-
-				strncpy(response.str_name,
-						str_req_name,
-						MAX_NAME_LEN);
-
-				response.str_name[MAX_NAME_LEN] = '\0';
-
-				rc = dds_write(response_writer,
-							   &response);
-
-				if (rc != DDS_RETCODE_OK)
-				{
-					DDS_FATAL("dds_write: %s\n",
-							  dds_strretcode(-rc));
-				}
-
-				printf("Name '%s' already taken - join rejected\n",
-					   str_req_name);
-			}
-			else if (auth_result != AUTH_OK)
-			{
-				response.int_player_id = -3;
-
-				strncpy(response.str_name,
-						str_req_name,
-						MAX_NAME_LEN);
-
-				response.str_name[MAX_NAME_LEN] = '\0';
-
-				rc = dds_write(response_writer,
-							   &response);
-
-				if (rc != DDS_RETCODE_OK)
-				{
-					DDS_FATAL("dds_write: %s\n",
-							  dds_strretcode(-rc));
-				}
-
-				printf("Wrong password for '%s' - join rejected\n",
-					   str_req_name);
+				printf("Re-sent join confirmation to '%s' (identity '%s', player %d) - "
+					   "original response was likely lost\n",
+					   str_req_name, request->str_identity, int_existing_player_id);
 			}
 			else
 			{
+				char str_req_password[65];
+				strncpy(str_req_password, request->str_password, sizeof(str_req_password) - 1);
+				str_req_password[sizeof(str_req_password) - 1] = '\0';
+
+				bool b_name_taken;
+				bool b_identity_taken;
+
 				pthread_mutex_lock(&mutex);
 
-				b_player_join = true;
+				b_name_taken = is_name_taken(str_req_name);
+				b_identity_taken = is_identity_taken(request->str_identity);
 
 				pthread_mutex_unlock(&mutex);
+
+				// Only spend time hashing/verifying credentials if the join
+				// would otherwise be accepted (real auth check, independent
+				// of which DDS client cert the connection presented).
+				AuthResult auth_result = AUTH_OK;
+				if (!b_name_taken && !b_identity_taken)
+				{
+					auth_result = auth_authenticate(str_req_name, str_req_password);
+				}
+				memset(str_req_password, 0, sizeof(str_req_password));
+
+				if (!b_name_taken && !b_identity_taken && auth_result == AUTH_OK)
+				{
+					pthread_mutex_lock(&mutex);
+
+					strncpy(str_pending_name,
+							str_req_name,
+							MAX_NAME_LEN);
+
+					str_pending_name[MAX_NAME_LEN] = '\0';
+
+					strncpy(str_pending_identity,
+							request->str_identity,
+							sizeof(str_pending_identity) - 1);
+
+					str_pending_identity[sizeof(str_pending_identity) - 1] = '\0';
+
+					pthread_mutex_unlock(&mutex);
+				}
+
+				if (b_identity_taken)
+				{
+					response.int_player_id = -2;
+
+					strncpy(response.str_name,
+							str_req_name,
+							MAX_NAME_LEN);
+
+					response.str_name[MAX_NAME_LEN] = '\0';
+
+					rc = dds_write(response_writer,
+								   &response);
+
+					if (rc != DDS_RETCODE_OK)
+					{
+						DDS_FATAL("dds_write: %s\n",
+								  dds_strretcode(-rc));
+					}
+
+					printf("Identity '%s' already connected\n",
+						   request->str_identity);
+				}
+				else if (b_name_taken)
+				{
+					response.int_player_id = -1;
+
+					strncpy(response.str_name,
+							str_req_name,
+							MAX_NAME_LEN);
+
+					response.str_name[MAX_NAME_LEN] = '\0';
+
+					rc = dds_write(response_writer,
+								   &response);
+
+					if (rc != DDS_RETCODE_OK)
+					{
+						DDS_FATAL("dds_write: %s\n",
+								  dds_strretcode(-rc));
+					}
+
+					printf("Name '%s' already taken - join rejected\n",
+						   str_req_name);
+				}
+				else if (auth_result != AUTH_OK)
+				{
+					response.int_player_id = -3;
+
+					strncpy(response.str_name,
+							str_req_name,
+							MAX_NAME_LEN);
+
+					response.str_name[MAX_NAME_LEN] = '\0';
+
+					rc = dds_write(response_writer,
+								   &response);
+
+					if (rc != DDS_RETCODE_OK)
+					{
+						DDS_FATAL("dds_write: %s\n",
+								  dds_strretcode(-rc));
+					}
+
+					printf("Wrong password for '%s' - join rejected\n",
+						   str_req_name);
+				}
+				else
+				{
+					pthread_mutex_lock(&mutex);
+
+					b_player_join = true;
+
+					pthread_mutex_unlock(&mutex);
+				}
 			}
 		}
 
@@ -477,9 +533,12 @@ void *worker(void *arg)
 			pthread_mutex_lock(&mutex);
 			// Reset the player ID
 			int_new_player_id = -1;
-			// Grab the name this join was for, to echo it in the response
+			// Grab the name this join was for, to echo it in the response.
+			// Must be str_admitted_name, not str_pending_name: the latter
+			// may already have been overwritten by a newer join accepted
+			// by this same worker thread before this response went out.
 			char str_resp_name[MAX_NAME_LEN + 1];
-			strncpy(str_resp_name, str_pending_name, MAX_NAME_LEN);
+			strncpy(str_resp_name, str_admitted_name, MAX_NAME_LEN);
 			str_resp_name[MAX_NAME_LEN] = '\0';
 			pthread_mutex_unlock(&mutex);
 
@@ -759,6 +818,13 @@ int main(void)
 							i + 1,
 							arr_Players[i].str_name,
 							arr_Players[i].str_identity);
+
+						// Snapshot the name alongside the ID, atomically,
+						// so the worker thread echoes back the name that
+						// actually matches this player ID (see comment on
+						// str_admitted_name).
+						strncpy(str_admitted_name, arr_Players[i].str_name, MAX_NAME_LEN);
+						str_admitted_name[MAX_NAME_LEN] = '\0';
 
 						// Set player ID to be the index plus 1
 						/* pthread_mutex_lock(&mutex); */
