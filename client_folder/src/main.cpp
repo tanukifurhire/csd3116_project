@@ -3,8 +3,8 @@
 #include <thread>
 
 #include "dds/dds.h"
-#include "../../messages.h"
-#include "../include/client.h"
+#include "messages.h"
+#include "client.h"
 
 Client client;
 

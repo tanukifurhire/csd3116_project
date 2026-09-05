@@ -5,7 +5,13 @@ IDLC = idlc
 IDL_SRC = messages.idl
 IDL_GEN = messages.c messages.h
 
-CXXFLAGS = -std=c++17 -Wall
+# Header search paths. With these, any .cpp/.h can write #include "client.h"
+# or #include "gameobject.h" no matter which folder it sits in -- no ../..
+# chains, and headers keep working if a file moves between folders.
+# '-I.' is for the idlc-generated messages.h at the repo root.
+INCLUDES = -I. -Iclient_folder/include -Iserver_folder/include -Ishared_folder/include
+
+CXXFLAGS = -std=c++17 -Wall $(INCLUDES)
 
 GLFW_CFLAGS    = $(shell pkg-config --cflags glfw3)
 GLFW_LIBS      = $(shell pkg-config --libs glfw3)
@@ -23,16 +29,15 @@ OPENSSL_LIBS   = $(shell pkg-config --libs libcrypto)
 # while the port is in progress (see docs/NETWORKING.md). 'make all' does
 # NOT build these yet -- run 'make cpp' explicitly.
 CLIENT_CPP_SRC = client_folder/src/main.cpp client_folder/src/client.cpp \
-                 client_folder/src/renderer.cpp
-SERVER_CPP_SRC = server_folder/src/main.cpp server_folder/src/server.cpp
+                 client_folder/src/renderer.cpp shared_folder/src/gameobject.cpp
+SERVER_CPP_SRC = server_folder/src/main.cpp server_folder/src/server.cpp\
+				 shared_folder/src/gameobject.cpp
 
 N ?= 1
 
 .PHONY: all clean run certs cpp
 
-all: server client certs
-
-cpp: client_cpp server_cpp
+all: client_cpp server_cpp certs
 
 $(IDL_GEN): $(IDL_SRC)
 	$(IDLC) -l c $(IDL_SRC)
@@ -68,7 +73,7 @@ messages.o: messages.c messages.h
 auth.o: auth.c auth.h
 	$(CC) -c auth.c -o auth.o $(OPENSSL_CFLAGS)
 
-client_cpp: $(CLIENT_CPP_SRC) client_folder/include/client.h client_folder/include/renderer.h messages.o
+client_cpp: $(CLIENT_CPP_SRC) client_folder/include/client.h client_folder/include/renderer.h shared_folder/include/gameobject.h messages.o
 	$(CXX) $(CXXFLAGS) -o client_cpp $(CLIENT_CPP_SRC) messages.o \
 		$(GLEW_CFLAGS) $(GLFW_CFLAGS) $(GLEW_LIBS) $(GLFW_LIBS) -lGL \
 		$(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm

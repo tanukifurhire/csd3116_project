@@ -1,4 +1,4 @@
-#include "../include/renderer.h"
+#include "renderer.h"
 
 #include <cstdio>
 #include <cstring>
