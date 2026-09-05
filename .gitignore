@@ -9,3 +9,12 @@ messages.h
 # ============================
 client
 server
+
+# ============================
+# Generated certs/policy files
+# ============================
+certs/*.key
+certs/*.pem
+certs/*.p7s
+certs/*.csr
+certs/*.srl

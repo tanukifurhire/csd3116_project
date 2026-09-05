@@ -1,27 +1,22 @@
-CC      = gcc
-IDLC    = idlc
+CC   = gcc
+IDLC = idlc
 
 IDL_SRC = messages.idl
 IDL_GEN = messages.c messages.h
-
-CFLAGS_DDS  = $(shell pkg-config --cflags CycloneDDS)
-LIBS_DDS    = $(shell pkg-config --libs CycloneDDS)
-CFLAGS_GLFW = $(shell pkg-config --cflags glfw3)
-LIBS_GLFW   = $(shell pkg-config --libs glfw3)
 
 .PHONY: all clean
 
 all: server client
 
-# Regenerate messages.c/.h only if messages.idl changed
 $(IDL_GEN): $(IDL_SRC)
 	$(IDLC) -l c $(IDL_SRC)
 
 server: server.c messages.c
-	$(CC) -o server server.c messages.c $(CFLAGS_DDS) $(LIBS_DDS)
+	$(CC) -o server server.c messages.c $(shell pkg-config --cflags --libs CycloneDDS)
 
 client: client.c messages.c
-	$(CC) client.c messages.c -o client $(CFLAGS_GLFW) -lGL $(CFLAGS_DDS) $(LIBS_DDS) -pthread -lm
+	$(CC) client.c messages.c -o client $(shell pkg-config --cflags --libs glfw3) -lGL $(shell pkg-config --cflags --libs CycloneDDS) -pthread -lm
 
 clean:
 	rm -f server client messages.c messages.h
+	rm -f certs/*.key certs/*.pem certs/*.p7s certs/*.csr certs/*.srl
