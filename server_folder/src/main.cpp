@@ -1,15 +1,20 @@
 #include <iostream>
-#include <string>
-#include <thread>
 
 #include "dds/dds.h"
 #include "messages.h"
 #include "server.h"
 
-Server server;
-
 int main()
 {
-    server.Init();
+    Server server;
+
+    if (!server.Init())
+    {
+        return 1;
+    }
+
+    server.Run();
+    server.Shutdown();
+
     return 0;
 }

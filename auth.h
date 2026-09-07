@@ -3,6 +3,11 @@
 
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
 typedef enum
 {
 	AUTH_OK,
@@ -18,5 +23,9 @@ bool auth_init(const char *path);
 // against the credentials already on file for 'username'. Username lookup
 // is case-insensitive.
 AuthResult auth_authenticate(const char *username, const char *password);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
