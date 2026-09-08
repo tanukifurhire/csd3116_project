@@ -15,6 +15,19 @@ Client::Client()
 {
 }
 
+std::atomic<bool> Client::s_stop_requested{false};
+
+void Client::RequestStop()
+{
+    // Only ever called from a signal handler (see main.cpp). Signal
+    // handlers may only safely call a small set of async-signal-safe
+    // functions; a lock-free atomic store is one of the few library
+    // operations that qualifies. std::atomic<bool> is lock-free on every
+    // platform this project targets (m_running already relies on the same
+    // property), so this is safe despite not being a plain sig_atomic_t.
+    s_stop_requested.store(true);
+}
+
 // ------------------------------------------------------------------
 // DDS Security: creates a participant configured with the Authentication,
 // Access Control, and Cryptographic plugins. Identical setup to the
@@ -126,6 +139,12 @@ bool Client::Init(const std::string &client_id)
 
     std::cout << "Welcome, " << m_name << "! DDS identity = " << m_identity << "\n";
 
+    if (s_stop_requested.load())
+    {
+        std::cout << "Interrupted before startup completed -- exiting.\n";
+        return false;
+    }
+
     if (!m_renderer.init(WINDOW_WIDTH, WINDOW_HEIGHT, "DDS Client (C++)"))
     {
         std::cerr << "Renderer failed to initialise" << std::endl;
@@ -208,6 +227,24 @@ void Client::WorkerThread()
 
     while (m_running.load())
     {
+        // Reflects whether the server's Position writer currently exists,
+        // not whether we've received data recently -- a quiet server (no
+        // one moving) is not a disconnection, but the writer going away
+        // (server process exiting, crashing, or a lease-duration liveliness
+        // timeout after the network drops) is. Cheap local status query,
+        // no network round-trip, safe to call every iteration.
+        dds_subscription_matched_status_t matched_status;
+        if (dds_get_subscription_matched_status(position_reader, &matched_status) == DDS_RETCODE_OK)
+        {
+            const bool now_connected = matched_status.current_count > 0;
+            if (now_connected != m_connected.load())
+            {
+                m_connected.store(now_connected);
+                printf(now_connected ? "Connected to server\n"
+                                      : "Lost connection to server\n");
+            }
+        }
+
         int player_id_temp;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -347,31 +384,40 @@ void Client::WorkerThread()
         }
 
         // Listen for position updates -- every player's, including ours;
-        // the server is authoritative for movement and collision.
-        rc = dds_take(position_reader, samples_position, infos_position, 1, 1);
-        if (rc < 0)
+        // the server is authoritative for movement and collision. Drain
+        // everything currently available so a burst of updates can't build
+        // up a backlog behind a single sample-per-iteration read.
+        do
         {
-            DDS_FATAL("dds_take: %s\n", dds_strretcode(-rc));
-        }
-
-        if ((rc > 0) && infos_position[0].valid_data)
-        {
-            printf("Position received\n");
-            Position *position = static_cast<Position *>(samples_position[0]);
-            const int position_player_id = position->int_player_id;
-
-            if (position_player_id >= 1 && position_player_id <= MAX_PLAYERS)
+            rc = dds_take(position_reader, samples_position, infos_position, 1, 1);
+            if (rc < 0)
             {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                PlayerSnapshot &slot = m_snapshot[position_player_id - 1];
-                slot.active = position->b_active;
-                if (position->b_active)
+                DDS_FATAL("dds_take: %s\n", dds_strretcode(-rc));
+            }
+
+            if ((rc > 0) && infos_position[0].valid_data)
+            {
+                printf("Position received\n");
+                Position *position = static_cast<Position *>(samples_position[0]);
+                const int position_player_id = position->int_player_id;
+
+                if (position_player_id >= 1 && position_player_id <= MAX_PLAYERS)
                 {
-                    slot.x = position->int_x;
-                    slot.y = position->int_y;
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    PlayerSnapshot &slot = m_snapshot[position_player_id - 1];
+                    slot.active = position->b_active;
+                    if (position->b_active)
+                    {
+                        slot.x = position->int_x;
+                        slot.y = position->int_y;
+                        // str_name is a fixed 9-byte buffer; bound the read
+                        // in case it's ever not null-terminated.
+                        slot.name.assign(position->str_name,
+                                         strnlen(position->str_name, sizeof(position->str_name)));
+                    }
                 }
             }
-        }
+        } while (rc > 0);
     }
 }
 
@@ -446,9 +492,9 @@ void Client::Update(float dt)
                 object->w = static_cast<float>(SQ_WIDTH);
                 object->h = static_cast<float>(SQ_WIDTH);
 
-                // The renderer has no text yet, so colour stands in for the
-                // per-player name label client.c drew: red is you, blue is
-                // everyone else.
+                // Colour still distinguishes you from everyone else at a
+                // glance (matches client.c's convention); the name label
+                // drawn above the square in Draw() supplements this.
                 if (owner_id == player_id)
                 {
                     object->r = 1.0f;
@@ -465,6 +511,9 @@ void Client::Update(float dt)
 
             object->x = static_cast<float>(snapshot[i].x);
             object->y = static_cast<float>(snapshot[i].y);
+            // Refresh in case the player renamed mid-session (re-joined
+            // under a different name) or this slot was just (re)claimed.
+            m_names[i] = snapshot[i].name;
         }
         else if (handle.valid())
         {
@@ -476,7 +525,9 @@ void Client::Update(float dt)
     std::string title;
     if (player_id != -1)
     {
-        title = "Player " + std::to_string(player_id) + " (" + name + ")";
+        title = IsConnected()
+            ? ("Player " + std::to_string(player_id) + " (" + name + ")")
+            : "Disconnected from server!";
     }
     else
     {
@@ -492,12 +543,56 @@ void Client::Update(float dt)
 
 void Client::Draw()
 {
+    int player_id;
+    std::string name;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        player_id = m_player_id;
+        name = m_name;
+    }
+
     m_renderer.begin_frame(1.0f, 1.0f, 1.0f);
 
     m_objects.for_each_active([&](const GameObject &object) {
         m_renderer.draw_quad_outline(object.x, object.y, object.w, object.h, 2.0f,
                                      object.r, object.g, object.b, object.a);
+
+        // Our own name comes straight from m_name; everyone else's comes
+        // from Position::str_name via m_names, refreshed each frame in
+        // Update(). Falls back to a per-ID label only if a name hasn't
+        // arrived yet (e.g. the very first frame a slot becomes active).
+        const std::string &other_name = m_names[object.owner_id - 1];
+        const std::string label = (object.owner_id == player_id)
+            ? name
+            : (other_name.empty() ? ("P" + std::to_string(object.owner_id)) : other_name);
+
+        constexpr float TEXT_SCALE = 2.0f; // pixel size of each font dot
+        constexpr float TEXT_GAP = 4.0f;   // gap between square top and text
+
+        const float text_w = m_renderer.text_width(label, TEXT_SCALE);
+        const float text_x = object.x + (object.w - text_w) * 0.5f; // centered
+        const float text_y = object.y - TEXT_GAP -
+                             static_cast<float>(Renderer::GLYPH_HEIGHT) * TEXT_SCALE;
+
+        m_renderer.draw_text(text_x, text_y, label, TEXT_SCALE,
+                             object.r, object.g, object.b, object.a);
     });
+
+    // A title-bar message alone is easy to miss while actually looking at
+    // the game, so also flag it on-screen once we've joined and then lost
+    // the server (not before joining -- "Waiting for server..." already
+    // covers that case in the title).
+    if (player_id != -1 && !IsConnected())
+    {
+        const std::string banner = "DISCONNECTED FROM SERVER";
+        constexpr float BANNER_SCALE = 3.0f;
+        constexpr float BANNER_Y = 20.0f;
+
+        const float banner_w = m_renderer.text_width(banner, BANNER_SCALE);
+        const float banner_x = (static_cast<float>(WINDOW_WIDTH) - banner_w) * 0.5f;
+
+        m_renderer.draw_text(banner_x, BANNER_Y, banner, BANNER_SCALE, 0.8f, 0.0f, 0.0f, 1.0f);
+    }
 
     m_renderer.end_frame();
 }
@@ -506,7 +601,7 @@ void Client::Run()
 {
     double last_time = glfwGetTime();
 
-    while (!m_renderer.should_close())
+    while (!m_renderer.should_close() && !s_stop_requested.load())
     {
         /* Frame-rate independent movement: scale by how long the last frame
          * took instead of moving a fixed number of pixels per iteration. */

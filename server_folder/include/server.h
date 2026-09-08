@@ -60,6 +60,15 @@ private:
         int y = 0;
         char name[MAX_NAME_LEN + 1] = {0};
         char identity[MAX_IDENTITY_LEN] = {0};
+        // GUID of the DDS participant this player joined from, resolved
+        // from the JoinRequest's publication handle at admission time. Lets
+        // CheckParticipantLiveliness() notice this participant disappearing
+        // (crash, kill -9, network loss) even if it never sends a
+        // LeaveRequest. All-zero means it couldn't be resolved at join time
+        // (see the warning printed there) -- such a player is only ever
+        // cleaned up by an explicit LeaveRequest, same as before this
+        // feature existed.
+        dds_guid_t participant_key = {};
     };
 
     void WorkerThread();
@@ -75,6 +84,19 @@ private:
     bool IsIdentityTaken(const char *identity) const;
     bool IsNameTaken(const char *name) const;
     int FindActivePlayerIdByIdentity(const char *identity) const;
+
+    // Caller must hold m_mutex. Marks a slot inactive, publishes its "gone"
+    // Position sample, and updates the active-player count -- the cleanup
+    // shared by an explicit LeaveRequest and CheckParticipantLiveliness()
+    // detecting the player's participant disappeared without sending one.
+    void EvictPlayer(int slot_index, const char *reason);
+
+    // Takes every currently-available sample from the DCPSParticipant
+    // built-in topic reader. Any participant reported not-alive whose key
+    // matches an active player's participant_key is evicted via
+    // EvictPlayer(); locks m_mutex itself only while actually matching/
+    // evicting, so the caller must NOT be holding it already.
+    void CheckParticipantLiveliness(dds_entity_t participant_reader);
 
     mutable std::mutex m_mutex;
 
@@ -94,6 +116,10 @@ private:
     // read by Run() when it assigns the ID.
     char m_pending_name[MAX_NAME_LEN + 1] = {0};
     char m_pending_identity[MAX_IDENTITY_LEN] = {0};
+    // GUID of the joining participant, resolved via dds_get_matched_publication_data()
+    // at the same point pending_name/pending_identity are captured. All-zero
+    // if resolution failed -- see the comment on Player::participant_key.
+    dds_guid_t m_pending_participant_key = {};
 
     // Name of whichever player m_new_player_id refers to, set by Run() at
     // the exact moment it assigns the ID. Kept separate from

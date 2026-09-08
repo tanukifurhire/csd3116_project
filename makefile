@@ -11,7 +11,7 @@ IDL_GEN = messages.c messages.h
 # '-I.' is for the idlc-generated messages.h at the repo root.
 INCLUDES = -I. -Iclient_folder/include -Iserver_folder/include -Ishared_folder/include
 
-CXXFLAGS = -std=c++17 -Wall $(INCLUDES)
+CXXFLAGS = -std=c++17 -Wall $(INCLUDES) 
 
 GLFW_CFLAGS    = $(shell pkg-config --cflags glfw3)
 GLFW_LIBS      = $(shell pkg-config --libs glfw3)

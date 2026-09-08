@@ -2,6 +2,61 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cctype>
+#include <unordered_map>
+
+namespace
+{
+    struct GlyphRows
+    {
+        const char *r[Renderer::GLYPH_HEIGHT]; /* 7 rows, 5 chars each: '#' = on, '.' = off */
+    };
+
+    const GlyphRows *find_glyph(char c)
+    {
+        static const std::unordered_map<char, GlyphRows> glyphs = {
+            {'A', {{".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"}}},
+            {'B', {{"####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."}}},
+            {'C', {{".####", "#....", "#....", "#....", "#....", "#....", ".####"}}},
+            {'D', {{"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."}}},
+            {'E', {{"#####", "#....", "#....", "####.", "#....", "#....", "#####"}}},
+            {'F', {{"#####", "#....", "#....", "####.", "#....", "#....", "#...."}}},
+            {'G', {{".####", "#....", "#....", "#.###", "#...#", "#...#", ".####"}}},
+            {'H', {{"#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"}}},
+            {'I', {{"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"}}},
+            {'J', {{"..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."}}},
+            {'K', {{"#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"}}},
+            {'L', {{"#....", "#....", "#....", "#....", "#....", "#....", "#####"}}},
+            {'M', {{"#...#", "##.##", "#.#.#", "#...#", "#...#", "#...#", "#...#"}}},
+            {'N', {{"#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"}}},
+            {'O', {{".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}}},
+            {'P', {{"####.", "#...#", "#...#", "####.", "#....", "#....", "#...."}}},
+            {'Q', {{".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"}}},
+            {'R', {{"####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"}}},
+            {'S', {{".####", "#....", "#....", ".###.", "....#", "....#", "####."}}},
+            {'T', {{"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."}}},
+            {'U', {{"#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}}},
+            {'V', {{"#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."}}},
+            {'W', {{"#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"}}},
+            {'X', {{"#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"}}},
+            {'Y', {{"#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."}}},
+            {'Z', {{"#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"}}},
+            {'0', {{".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."}}},
+            {'1', {{"..#..", ".##..", "..#..", "..#..", "..#..", "..#..", "#####"}}},
+            {'2', {{".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"}}},
+            {'3', {{"#####", "...#.", "..#..", "...#.", "....#", "#...#", ".###."}}},
+            {'4', {{"...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."}}},
+            {'5', {{"#####", "#....", "####.", "....#", "....#", "#...#", ".###."}}},
+            {'6', {{"..##.", ".#...", "#....", "####.", "#...#", "#...#", ".###."}}},
+            {'7', {{"#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."}}},
+            {'8', {{".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."}}},
+            {'9', {{".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."}}},
+        };
+
+        auto it = glyphs.find(c);
+        return it != glyphs.end() ? &it->second : nullptr;
+    }
+} // namespace
 
 /* The whole pipeline in two shaders.
  *
@@ -101,12 +156,12 @@ void Renderer::update_projection(int width, int height)
      * glOrtho(0, width, height, 0, -1, 1): x grows right, y grows DOWN, so
      * (0,0) is the top-left corner and units are pixels. */
     std::memset(m_projection, 0, sizeof(m_projection));
-    m_projection[0]  =  2.0f / static_cast<float>(width);
-    m_projection[5]  = -2.0f / static_cast<float>(height);
+    m_projection[0] = 2.0f / static_cast<float>(width);
+    m_projection[5] = -2.0f / static_cast<float>(height);
     m_projection[10] = -1.0f;
     m_projection[12] = -1.0f;
-    m_projection[13] =  1.0f;
-    m_projection[15] =  1.0f;
+    m_projection[13] = 1.0f;
+    m_projection[15] = 1.0f;
 }
 
 bool Renderer::init(int width, int height, const std::string &title)
@@ -265,10 +320,10 @@ void Renderer::draw_quad(float x, float y, float w, float h,
      *     |           |        | \ |     second triangle: 0 2 3
      *   (x,y+h) - (x+w,y+h)    3---2
      */
-    const Vertex top_left     = {x,     y,     r, g, b, a};
-    const Vertex top_right    = {x + w, y,     r, g, b, a};
+    const Vertex top_left = {x, y, r, g, b, a};
+    const Vertex top_right = {x + w, y, r, g, b, a};
     const Vertex bottom_right = {x + w, y + h, r, g, b, a};
-    const Vertex bottom_left  = {x,     y + h, r, g, b, a};
+    const Vertex bottom_left = {x, y + h, r, g, b, a};
 
     m_vertices.push_back(top_left);
     m_vertices.push_back(top_right);
@@ -283,10 +338,10 @@ void Renderer::draw_quad_outline(float x, float y, float w, float h,
                                  float thickness,
                                  float r, float g, float b, float a)
 {
-    draw_quad(x, y, w, thickness, r, g, b, a);                      /* top    */
-    draw_quad(x, y + h - thickness, w, thickness, r, g, b, a);      /* bottom */
-    draw_quad(x, y, thickness, h, r, g, b, a);                      /* left   */
-    draw_quad(x + w - thickness, y, thickness, h, r, g, b, a);      /* right  */
+    draw_quad(x, y, w, thickness, r, g, b, a);                 /* top    */
+    draw_quad(x, y + h - thickness, w, thickness, r, g, b, a); /* bottom */
+    draw_quad(x, y, thickness, h, r, g, b, a);                 /* left   */
+    draw_quad(x + w - thickness, y, thickness, h, r, g, b, a); /* right  */
 }
 
 void Renderer::end_frame()
@@ -321,4 +376,48 @@ void Renderer::end_frame()
 
     glfwSwapBuffers(m_window);
     glfwPollEvents();
+}
+
+float Renderer::text_width(const std::string &text, float scale) const
+{
+    if (text.empty())
+    {
+        return 0.0f;
+    }
+    const float glyph_px = static_cast<float>(GLYPH_WIDTH) * scale;
+    const float gap_px = static_cast<float>(GLYPH_SPACING) * scale;
+    return static_cast<float>(text.size()) * glyph_px +
+           static_cast<float>(text.size() - 1) * gap_px;
+}
+
+void Renderer::draw_text(float x, float y, const std::string &text, float scale,
+                         float r, float g, float b, float a)
+{
+    float cursor_x = x;
+
+    for (char raw_c : text)
+    {
+        const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(raw_c)));
+        const GlyphRows *glyph = find_glyph(c);
+
+        if (glyph != nullptr)
+        {
+            for (int row = 0; row < GLYPH_HEIGHT; row++)
+            {
+                const char *row_pixels = glyph->r[row];
+                for (int col = 0; col < GLYPH_WIDTH; col++)
+                {
+                    if (row_pixels[col] == '#')
+                    {
+                        draw_quad(cursor_x + static_cast<float>(col) * scale,
+                                 y + static_cast<float>(row) * scale,
+                                 scale, scale, r, g, b, a);
+                    }
+                }
+            }
+        }
+        /* Unsupported characters (and space) just advance the cursor. */
+
+        cursor_x += static_cast<float>(GLYPH_WIDTH + GLYPH_SPACING) * scale;
+    }
 }

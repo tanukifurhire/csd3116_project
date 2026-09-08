@@ -57,6 +57,15 @@ public:
                            float thickness,
                            float r, float g, float b, float a = 1.0f);
 
+    void draw_text(float x, float y, const std::string &text, float scale,
+                   float r, float g, float b, float a = 1.0f);
+                   
+    float text_width(const std::string &text, float scale) const;
+
+    static constexpr int GLYPH_WIDTH = 5;
+    static constexpr int GLYPH_HEIGHT = 7;
+    static constexpr int GLYPH_SPACING = 1; /* blank columns between characters */
+
     /* Uploads the batch, issues the draw call, swaps buffers and polls input. */
     void end_frame();
 
@@ -77,10 +86,10 @@ private:
     static GLuint link_program(GLuint vertex_shader, GLuint fragment_shader);
 
     GLFWwindow *m_window = nullptr;
-    GLuint m_program     = 0;
-    GLuint m_vao         = 0;
-    GLuint m_vbo         = 0;
-    GLint  m_projection_loc = -1;
+    GLuint m_program = 0;
+    GLuint m_vao = 0;
+    GLuint m_vbo = 0;
+    GLint m_projection_loc = -1;
 
     /* Bytes currently allocated on the GPU, so the buffer is only reallocated
      * when a frame needs more room than the last one did. */

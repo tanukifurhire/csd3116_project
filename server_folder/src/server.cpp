@@ -29,6 +29,22 @@ std::string FileUri(const char *path)
 {
     return std::string("file:") + path;
 }
+
+bool ParticipantKeysEqual(const dds_guid_t &a,
+                          const dds_guid_t &b)
+{
+    return memcmp(a.v, b.v, sizeof(a.v)) == 0;
+}
+
+// Player::participant_key/m_pending_participant_key default to all-zero,
+// which is never a real DDS GUID -- used to detect "never resolved" so
+// CheckParticipantLiveliness() doesn't accidentally match two such players
+// against each other.
+bool ParticipantKeyIsZero(const dds_guid_t &key)
+{
+    static const dds_guid_t zero_key = {};
+    return ParticipantKeysEqual(key, zero_key);
+}
 } // namespace
 
 Server::Server() = default;
@@ -144,6 +160,79 @@ int Server::FindActivePlayerIdByIdentity(const char *identity) const
     return -1;
 }
 
+// Caller must hold m_mutex.
+void Server::EvictPlayer(int slot_index, const char *reason)
+{
+    Position position{};
+    position.int_player_id = slot_index + 1;
+    position.int_x = 0;
+    position.int_y = 0;
+    position.b_active = false;
+    position.str_name[0] = '\0';
+
+    dds_write(m_position_writer, &position);
+
+    printf("Player %d evicted (%s, identity=%s)\n",
+           slot_index + 1, reason, m_players[slot_index].identity);
+
+    m_players[slot_index].active = false;
+    m_players[slot_index].name[0] = '\0';
+    m_players[slot_index].identity[0] = '\0';
+    m_players[slot_index].participant_key = dds_guid_t{};
+
+    m_num_active_players--;
+}
+
+void Server::CheckParticipantLiveliness(dds_entity_t participant_reader)
+{
+    // Loan pattern (samples start NULL, dds_return_loan() releases them)
+    // rather than this file's usual dds_alloc()-once-and-reuse pattern:
+    // dds_builtintopic_participant_t carries a heap-allocated dds_qos_t*,
+    // so a reused fixed buffer would leak that pointer every time dds_take
+    // overwrote it. dds_return_loan() frees it correctly.
+    void *samples[4] = {nullptr, nullptr, nullptr, nullptr};
+    dds_sample_info_t infos[4];
+
+    const dds_return_t rc = dds_take(participant_reader, samples, infos, 4, 4);
+    if (rc < 0)
+    {
+        DDS_FATAL("dds_take (participant liveliness): %s\n", dds_strretcode(-rc));
+    }
+
+    for (dds_return_t i = 0; i < rc; i++)
+    {
+        // A participant that has gone away is reported with valid_data
+        // false and a non-ALIVE instance_state; the key identifying WHICH
+        // participant is still populated even though the rest of the
+        // sample isn't.
+        if (infos[i].instance_state == DDS_ALIVE_INSTANCE_STATE)
+        {
+            continue;
+        }
+
+        const auto *sample = static_cast<const dds_builtintopic_participant_t *>(samples[i]);
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (int slot = 0; slot < MAX_PLAYERS; slot++)
+        {
+            if (!m_players[slot].active || ParticipantKeyIsZero(m_players[slot].participant_key))
+            {
+                continue;
+            }
+            if (ParticipantKeysEqual(m_players[slot].participant_key, sample->key))
+            {
+                EvictPlayer(slot, "participant disappeared");
+                break; // a participant maps to at most one active player
+            }
+        }
+    }
+
+    if (rc > 0)
+    {
+        dds_return_loan(participant_reader, samples, rc);
+    }
+}
+
 void Server::WorkerThread()
 {
     m_participant = CreateSecureParticipant(
@@ -182,6 +271,12 @@ void Server::WorkerThread()
     const dds_entity_t input_reader = dds_create_reader(m_participant, input_topic, NULL, NULL);
     const dds_entity_t leave_reader = dds_create_reader(m_participant, leave_topic, NULL, NULL);
 
+    // Built-in topic (no dds_create_topic() call -- it always exists), used
+    // by CheckParticipantLiveliness() to notice a client's participant
+    // disappearing without an explicit LeaveRequest.
+    const dds_entity_t participant_reader = dds_create_reader(
+        m_participant, DDS_BUILTIN_TOPIC_DCPSPARTICIPANT, NULL, NULL);
+
     /* ----------------------------------------------------- */
     /* Create writers                                         */
     /* ----------------------------------------------------- */
@@ -207,6 +302,9 @@ void Server::WorkerThread()
     /* Poll until data has been read. */
     while (m_running.load())
     {
+        // ---- Notice clients that disappeared without a LeaveRequest ----
+        CheckParticipantLiveliness(participant_reader);
+
         // ---- Process a join request ----
         rc = dds_take(join_reader, samples_join, infos_join, 1, 1);
         if (rc < 0)
@@ -284,11 +382,32 @@ void Server::WorkerThread()
 
                 if (!name_taken && !identity_taken && auth_result == AUTH_OK)
                 {
+                    // Resolve which DDS participant sent this JoinRequest,
+                    // via the builtin-topic data for the writer that
+                    // published it (infos_join[0].publication_handle
+                    // identifies that specific writer instance). Used later
+                    // by CheckParticipantLiveliness() to notice this
+                    // participant disappearing without a LeaveRequest.
+                    dds_guid_t participant_key = {};
+                    dds_builtintopic_endpoint_t *pub_data =
+                        dds_get_matched_publication_data(join_reader, infos_join[0].publication_handle);
+                    if (pub_data != nullptr)
+                    {
+                        participant_key = pub_data->participant_key;
+                        dds_builtintopic_free_endpoint(pub_data);
+                    }
+                    else
+                    {
+                        printf("Warning: could not resolve participant for '%s' -- "
+                               "disconnect detection won't cover this player\n", req_name);
+                    }
+
                     std::lock_guard<std::mutex> lock(m_mutex);
                     strncpy(m_pending_name, req_name, MAX_NAME_LEN);
                     m_pending_name[MAX_NAME_LEN] = '\0';
                     strncpy(m_pending_identity, request->str_identity, sizeof(m_pending_identity) - 1);
                     m_pending_identity[sizeof(m_pending_identity) - 1] = '\0';
+                    m_pending_participant_key = participant_key;
                 }
 
                 if (identity_taken)
@@ -465,23 +584,14 @@ void Server::WorkerThread()
             const int id = leave->int_player_id;
 
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (id > 0 && id <= MAX_PLAYERS)
+            // The active check guards against a redundant/duplicate
+            // LeaveRequest for a slot CheckParticipantLiveliness() (or an
+            // earlier LeaveRequest) already evicted -- without it,
+            // m_num_active_players would be decremented twice for one
+            // departure.
+            if (id > 0 && id <= MAX_PLAYERS && m_players[id - 1].active)
             {
-                position.int_player_id = id;
-                position.int_x = 0;
-                position.int_y = 0;
-                position.b_active = false;
-                position.str_name[0] = '\0';
-
-                dds_write(m_position_writer, &position);
-
-                m_players[id - 1].active = false;
-                m_players[id - 1].name[0] = '\0';
-                m_players[id - 1].identity[0] = '\0';
-
-                m_num_active_players--;
-
-                printf("Player %d left (%s)\n", id, leave->str_identity);
+                EvictPlayer(id - 1, "left");
             }
         }
     }
@@ -548,6 +658,7 @@ void Server::Run()
                     m_players[i].name[MAX_NAME_LEN] = '\0';
                     strncpy(m_players[i].identity, m_pending_identity, MAX_IDENTITY_LEN - 1);
                     m_players[i].identity[MAX_IDENTITY_LEN - 1] = '\0';
+                    m_players[i].participant_key = m_pending_participant_key;
 
                     // Calculate a spawn point clear of every other player.
                     int rand_x = 0;

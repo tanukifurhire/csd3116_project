@@ -30,6 +30,20 @@ public:
 
     void Shutdown();
 
+    /* Async-signal-safe: only sets an atomic flag. Called from main.cpp's
+     * SIGINT/SIGTERM handler so Ctrl+C (or a `kill`) breaks Run()'s loop on
+     * its next iteration instead of killing the process mid-frame -- which
+     * would skip SendLeaveRequest() and leave this player stuck active on
+     * the server until it independently notices via liveliness/timeout. */
+    static void RequestStop();
+
+    /* True once the position reader has matched the server's writer at
+     * least once and that match hasn't since dropped back to zero. Distinct
+     * from "haven't received a Position sample recently", which can be
+     * normal if nobody has moved -- this reflects whether the server's
+     * writer is currently known to exist at all. */
+    bool IsConnected() const { return m_connected.load(); }
+
 private:
     static const int MAX_PLAYERS = 5;
     static const int MAX_NAME_LEN = 8;
@@ -70,6 +84,7 @@ private:
         bool active = false;
         int x = 0;
         int y = 0;
+        std::string name; // from Position::str_name, so other players' real names can be shown
     };
 
     Renderer m_renderer;
@@ -81,6 +96,11 @@ private:
      * server, not this client, is authoritative for movement and
      * collision. */
     GameObjectPool m_objects;
+
+    /* Latest known name per player slot (index == player_id - 1), refreshed
+     * from m_snapshot in Update(). Main-thread-only, same as m_objects --
+     * see the comment above it -- so no locking needed here either. */
+    std::array<std::string, MAX_PLAYERS> m_names;
 
     std::mutex m_mutex;
 
@@ -103,6 +123,14 @@ private:
 
     std::thread m_worker;
     std::atomic<bool> m_running{false};
+
+    /* Set by WorkerThread() from dds_get_subscription_matched_status() on
+     * the position reader -- see IsConnected(). */
+    std::atomic<bool> m_connected{false};
+
+    /* Set by RequestStop(), which may run on a signal handler's thread of
+     * execution; checked (not written) from Run()'s loop and Init(). */
+    static std::atomic<bool> s_stop_requested;
 };
 
 #endif /* CLIENT_H */
