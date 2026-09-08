@@ -94,6 +94,7 @@ private:
 
     std::string m_identity;   // "clientN", sent as this client's app-layer identity
     std::string m_client_id;  // "N", selects certs/clientN.{pem,key}
+    std::string m_last_title; // last title passed to glfwSetWindowTitle, so we only call it on change
 
     dds_entity_t m_participant = 0;
     dds_entity_t m_join_writer = 0;

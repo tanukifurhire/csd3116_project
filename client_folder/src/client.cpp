@@ -482,7 +482,12 @@ void Client::Update(float dt)
     {
         title = "Waiting for server...";
     }
-    glfwSetWindowTitle(m_renderer.window(), title.c_str());
+
+    if (title != m_last_title)
+    {
+        glfwSetWindowTitle(m_renderer.window(), title.c_str());
+        m_last_title = title;
+    }
 }
 
 void Client::Draw()
