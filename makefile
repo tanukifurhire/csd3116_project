@@ -1,14 +1,32 @@
 CC   = gcc
+CXX  = g++
 IDLC = idlc
 
 IDL_SRC = messages.idl
 IDL_GEN = messages.c messages.h
 
+CXXFLAGS = -std=c++17 -Wall
+
+GLFW_CFLAGS    = $(shell pkg-config --cflags glfw3)
+GLFW_LIBS      = $(shell pkg-config --libs glfw3)
+DDS_CFLAGS     = $(shell pkg-config --cflags CycloneDDS)
+DDS_LIBS       = $(shell pkg-config --libs CycloneDDS)
+OPENSSL_CFLAGS = $(shell pkg-config --cflags libcrypto)
+OPENSSL_LIBS   = $(shell pkg-config --libs libcrypto)
+
+# C++ port of client/server, built alongside the existing C client/server
+# while the port is in progress (see docs/NETWORKING.md). 'make all' does
+# NOT build these yet -- run 'make cpp' explicitly.
+CLIENT_CPP_SRC = client_folder/src/main.cpp client_folder/src/client.cpp
+SERVER_CPP_SRC = server_folder/src/main.cpp server_folder/src/server.cpp
+
 N ?= 1
 
-.PHONY: all clean run certs
+.PHONY: all clean run certs cpp
 
 all: server client certs
+
+cpp: client_cpp server_cpp
 
 $(IDL_GEN): $(IDL_SRC)
 	$(IDLC) -l c $(IDL_SRC)
@@ -29,13 +47,31 @@ certs/permissions.p7s: permissions.xml certs/ca.pem
 certs: certs/governance.p7s certs/permissions.p7s
 
 server: server.c auth.c auth.h messages.c
-	$(CC) -o server server.c auth.c messages.c $(shell pkg-config --cflags --libs CycloneDDS) -lcrypto
+	$(CC) -o server server.c auth.c messages.c $(DDS_CFLAGS) $(DDS_LIBS) $(OPENSSL_LIBS)
 
 client: client.c messages.c
-	$(CC) client.c messages.c -o client $(shell pkg-config --cflags --libs glfw3) -lGL $(shell pkg-config --cflags --libs CycloneDDS) -pthread -lm
+	$(CC) client.c messages.c -o client $(GLFW_CFLAGS) $(GLFW_LIBS) -lGL $(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm
+
+# messages.c/auth.c are plain C translation units, shared as-is with the C++
+# port. Compiled separately with $(CC) (not $(CXX)) and linked into the C++
+# binaries -- g++ compiles .c input as C++ by default, which would silently
+# change how these files are parsed if built directly by the CXX rules below.
+messages.o: messages.c messages.h
+	$(CC) -c messages.c -o messages.o $(DDS_CFLAGS)
+
+auth.o: auth.c auth.h
+	$(CC) -c auth.c -o auth.o $(OPENSSL_CFLAGS)
+
+client_cpp: $(CLIENT_CPP_SRC) client_folder/include/client.h messages.o
+	$(CXX) $(CXXFLAGS) -o client_cpp $(CLIENT_CPP_SRC) messages.o \
+		$(GLFW_CFLAGS) $(GLFW_LIBS) -lGL $(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm
+
+server_cpp: $(SERVER_CPP_SRC) server_folder/include/server.h messages.o auth.o
+	$(CXX) $(CXXFLAGS) -o server_cpp $(SERVER_CPP_SRC) messages.o auth.o \
+		$(DDS_CFLAGS) $(DDS_LIBS) $(OPENSSL_CFLAGS) $(OPENSSL_LIBS)
 
 clean:
-	rm -f server client messages.c messages.h
+	rm -f server client client_cpp server_cpp messages.c messages.h messages.o auth.o
 	rm -f certs/*.key certs/*.pem certs/*.p7s certs/*.csr certs/*.srl
 
 # Starts the server, waits a few seconds for it to come up, then launches
