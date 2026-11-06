@@ -83,12 +83,13 @@ Run every program from the repository root (it finds `certs/`, `assets/` and `ne
 ```bash
 ./api_server &                      # login + rooms, TCP 7600
 ./game_server --tcp-port 8443 &     # game router, UDP 7700-7701 + TCP 8443 fallback
-./drifto --api 127.0.0.1            # menu -> ONLINE; start 2+ clients to race
+./drifto --api 127.0.0.1            # menu -> ONLINE PLAY; start 2+ clients to race
 ```
 Other modes, no servers needed:
 ```bash
 ./drifto --offline --bots 3         # race against bots
 ./drifto --lan                      # LAN: rooms are discovered on the local network
+./drifto --car rx7                  # pick the RX-7 (default AE86); also A/D in the menus
 ```
 Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting; a burn needs 5% to start), Esc back.
 In the menus, room list and lobby A/D or Left/Right picks your car (AE86 / RX-7, same physics; remembered).
@@ -98,10 +99,11 @@ for deployment on a public server, ports and the LAN details.
 
 **Tests and profiling**
 ```bash
-make check_game                     # 37 simulation tests (no GL, no DDS)
+make check_game                     # 49 simulation tests (no GL, no DDS)
 make game_tests_asan && ./build/asan/game_tests
 make net_tests && ./net_tests       # 13 networking scenarios, starts its own servers
 make bench_hot && perf stat ./bench_hot bot 100   # hot-path benchmark (perf/)
+make bot_bench && ./bot_bench 12 90 solo,pack,mix # bots: wrecks, takedowns, m/min, nitro use
 ```
 
 ### Run the course baseline (legacy server/client)
