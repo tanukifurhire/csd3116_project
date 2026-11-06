@@ -63,7 +63,10 @@ struct Camera
     dm::Vec3 target;
     dm::Vec3 up{0, 1, 0};
     float fovY = dm::radians(60.0f);
-    float zNear = 0.1f;
+    // 0.3 m, not 0.1: depth-buffer precision scales with zNear, and nearly
+    // coplanar layers (skid marks 2 cm over the road, kerbs, decals) need it
+    // at a few hundred metres. The chase camera never gets that close to anything.
+    float zNear = 0.3f;
     float zFar = 1500.0f;
 };
 
@@ -88,6 +91,11 @@ struct DrawParams
     // camera-motion blur reprojects the world as static, which would smear
     // anything that moves *with* the camera.
     bool motionBlur = true;
+    // Car body colour: when usePaint is set, submeshes the asset converter
+    // tagged as body paint are drawn in exactly this colour (still lit and
+    // multiplied by tint); tyres, glass, lights and decals keep their own.
+    bool usePaint = false;
+    dm::Vec3 paint{1, 1, 1};
 };
 
 // Per-frame post-processing / screen effects input (see Renderer::setFrameFx).

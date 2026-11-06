@@ -31,16 +31,12 @@ void appendMesh(gfx::MeshData &a, const gfx::MeshData &b)
     for (uint32_t i : b.indices) a.indices.push_back(base + i);
 }
 
-// Model tint per look: multiplies the texture/vertex albedo.
-// Model tint per look: multiplies the texture/vertex albedo.
-const dm::Vec3 kLookTint[4] = {{1.0f, 1.0f, 1.0f}, {1.0f, 0.82f, 0.25f}, {1.0f, 0.38f, 0.32f}, {0.42f, 0.62f, 1.0f}};
-
 } // namespace
 
-// Colour used for HUD swatches and for the untextured box car; look is wrapped to 0..3.
+// Body paint colour of a look: painted solid onto the car models' body
+// panels, used for the box car and the HUD swatches; look is wrapped to 0..3.
 dm::Vec3 lookColor(int look)
 {
-    // HUD swatch colours (what the car mostly looks like).
     const dm::Vec3 c[4] = {{0.95f, 0.95f, 0.95f}, {0.95f, 0.75f, 0.2f}, {0.95f, 0.3f, 0.25f}, {0.35f, 0.55f, 1.0f}};
     return c[((look % 4) + 4) % 4];
 }
@@ -161,22 +157,17 @@ void WorldView::destroySection(SectionGfx &s)
 
 // Keep the set of built sections matching the cars: from viewBehind metres
 // before the rearmost of {camera car, field} to viewAhead beyond the
-// frontmost, capped at maxSections. Trees are only drawn treeAhead metres
-// ahead. Far sections are freed; missing ones are built under a per-frame
-// budget (64 on a fresh track, else 3), nearest first.
+// frontmost, capped at maxSections. Far sections are freed; missing ones are
+// built under a per-frame budget (64 on a fresh track, else 3), nearest first.
 void WorldView::streamSections(const game::Track &track, uint32_t current, uint32_t fieldFirst, uint32_t fieldLast)
 {
     if (!haveTrack_ || track.seed() != seed_) reset(track);
-    current_ = current;
     uint32_t lo = std::min(current, fieldFirst), hi = std::max(current, fieldLast);
     const uint32_t count = track.sectionCount();
     uint32_t first = std::min(lo, count - 1), last = std::min(hi, count - 1);
     while (first > 0 && track.section(lo).startDistance - track.section(first).startDistance < viewBehind) --first;
     const float aheadEnd = track.section(last).startDistance + track.section(last).length + viewAhead;
     while (last + 1 < count && track.section(last + 1).startDistance < aheadEnd) ++last;
-    treeLast_ = std::min(current, count - 1);
-    const float treeEnd = track.section(treeLast_).startDistance + treeAhead;
-    while (treeLast_ + 1 < count && track.section(treeLast_ + 1).startDistance < treeEnd) ++treeLast_;
     // Keep the count bounded around the camera car if the field is huge.
     if (last - first + 1 > static_cast<uint32_t>(maxSections))
     {
@@ -295,24 +286,29 @@ const WorldView::CarModel &WorldView::carModelFor(int look) const
 
 // Draw one car and update its animation state with the frame dt (s).
 // Wheel steering follows -driftAngle, clamped, eased at ~10/s; wheel spin
-// integrates forward speed / wheel radius. Split body + wheels are used only
-// for the local car; remote cars draw the single model.
-void WorldView::drawCar(const game::CarView &car, CarAnim &anim, float dt, float time, bool cameraTarget)
+// integrates forward speed / wheel radius. Every car is drawn as body + four
+// wheels when the model has them (so all cars steer); else the single model.
+void WorldView::drawCar(const game::CarView &car, CarAnim &anim, float dt, float time)
 {
     const game::CarParams &p = game::defaultCarParams();
     const CarModel &m = carModelFor(car.look);
     gfx::DrawParams dp;
-    dp.tint = kLookTint[((car.look % 4) + 4) % 4];
-    if (!m.full && !m.body) dp.tint = lookColor(car.look); // box car: paint it
-    if (!car.alive) dp.tint = dp.tint * 0.45f;             // wrecked
+    // The look's colour replaces the body paint only (the renderer leaves
+    // tyres, glass, lights and decals alone); the box car is painted whole.
+    dp.usePaint = true;
+    dp.paint = lookColor(car.look);
+    if (!m.full && !m.body) dp.tint = lookColor(car.look);
+    if (!car.alive) dp.tint = dp.tint * 0.45f; // wrecked
     if (car.ghost && car.alive)
     {
         dp.alpha = 0.45f; // just respawned: ghosted (transparent pass, no outline)
         dp.castShadow = false;
     }
-    // Camera-motion blur treats the world as static: anything that moves with
-    // the camera (the car it follows) must opt out or it smears.
-    dp.motionBlur = !cameraTarget;
+    // Camera-motion blur treats the world as static, so it smears anything
+    // that moves: the followed car (which moves with the camera) and the
+    // rivals around it alike, and the smear came and went with the camera's
+    // swing (flicker). Cars opt out; the background still blurs.
+    dp.motionBlur = false;
     dm::Mat4 world = dm::trs(car.position, car.rotation);
     dm::Mat4 ground = world * dm::translate({0, -p.rideHeight, 0}) * dm::scale({m.scale, m.scale, m.scale});
 
@@ -333,9 +329,9 @@ void WorldView::drawCar(const game::CarView &car, CarAnim &anim, float dt, float
     anim.wasBurning = burning;
 
     gfx::ModelHandle flameRef = 0;
-    if (car.local && m.body && m.wheel)
+    if (m.body && m.wheel)
     {
-        // Split body + spinning wheels only for the local car (cheaper on llvmpipe).
+        // Body + four spinning wheels, the front pair steered.
         r_.drawModel(m.body, ground, dp);
         for (int i = 0; i < 4; ++i)
         {
@@ -372,21 +368,37 @@ void WorldView::draw(const std::vector<game::CarView> &cars, float dt, float tim
     gfx::DrawParams flat;
     flat.outline = false;
     flat.castShadow = false;
+    bool haveFocus = false;
+    dm::Vec3 focus{0, 0, 0};
     for (const game::CarView &c : cars)
-        if (c.playerId == cameraTargetId && valley_)
-            r_.drawMesh(valley_, dm::translate({c.position.x, c.position.y - valleyDepth, c.position.z}), flat);
+        if (c.playerId == cameraTargetId)
+        {
+            focus = c.position;
+            haveFocus = true;
+            if (valley_) r_.drawMesh(valley_, dm::translate({c.position.x, c.position.y - valleyDepth, c.position.z}), flat);
+        }
+    if (!haveFocus && !cars.empty()) focus = cars.front().position;
+    // Trees: every built section's trees within treeAhead metres (straight
+    // line) of the camera car. Choosing them by section index along the road
+    // made trees pop in and out in plain view on switchbacks, where the road
+    // 150 m ahead or one section behind can be right beside the camera. The
+    // outer 25 m grow trees out of the ground instead of popping them in.
+    const float growBand = 25.0f;
+    gfx::DrawParams tp;
+    tp.castShadow = false;
+    tp.outline = treeOutlines;
     for (const auto &kv : sections_)
     {
         const SectionGfx &s = kv.second;
         if (s.road) r_.drawMesh(s.road, dm::Mat4{}, flat);
-        if (kv.first + 1 < current_ || kv.first > treeLast_) continue;
-        gfx::DrawParams tp;
-        tp.castShadow = false;
-        tp.outline = treeOutlines;
         for (const TreeInstance &t : s.trees)
         {
-            if (t.model) r_.drawModel(t.model, t.xform, tp);
-            else r_.drawMesh(fallbackTrees_[t.fallback % 3], t.xform, tp);
+            dm::Vec3 base{t.xform.at(0, 3), t.xform.at(1, 3), t.xform.at(2, 3)};
+            float grow = (treeAhead - dm::length(base - focus)) / growBand;
+            if (grow <= 0.0f) continue;
+            dm::Mat4 xf = grow < 1.0f ? t.xform * dm::scale({grow, grow, grow}) : t.xform;
+            if (t.model) r_.drawModel(t.model, xf, tp);
+            else r_.drawMesh(fallbackTrees_[t.fallback % 3], xf, tp);
         }
     }
 
@@ -398,7 +410,7 @@ void WorldView::draw(const std::vector<game::CarView> &cars, float dt, float tim
         if (kv.second.marksMesh) r_.drawMesh(kv.second.marksMesh, dm::Mat4{}, marks);
 
     for (const game::CarView &c : cars)
-        if (!c.eliminated) drawCar(c, anims_[c.playerId], dt, time, c.playerId == cameraTargetId);
+        if (!c.eliminated) drawCar(c, anims_[c.playerId], dt, time);
 
     // Smoke particles.
     for (Particle &p : particles_)

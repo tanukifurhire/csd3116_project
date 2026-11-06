@@ -18,8 +18,8 @@
 
 namespace client {
 
-// The four car looks (CarView::look): AE86 white, RX-7 as modelled, AE86 in
-// red, RX-7 in blue. HUD swatches use lookColor().
+// The four car looks (CarView::look): AE86 white, RX-7 yellow, AE86 red,
+// RX-7 blue. lookColor() is the body paint (also the HUD swatch colour).
 dm::Vec3 lookColor(int look);
 const char *lookName(int look);
 
@@ -36,9 +36,11 @@ public:
     // Sections kept alive around the viewer (the original's forward/rear
     // buffer, a bit wider because the switchback below stays visible).
     // (distances, because sections now range from a few metres to 70 m)
-    float viewBehind = 40.0f;  // metres of road kept behind the last car
+    // (kept 120 m behind: at 40 m the road and terrain beside the camera
+    // vanished on switchbacks and when the camera swung round in a drift)
+    float viewBehind = 120.0f; // metres of road kept behind the last car
     float viewAhead = 320.0f;  // ...and ahead of the leader / camera car
-    float treeAhead = 160.0f;  // trees only this far ahead (fog hides the rest)
+    float treeAhead = 200.0f;  // trees only within this distance of the camera car
     int maxSections = 64;      // cap on how many sections are alive at once
     float valleyDepth = 38.0f; // valley floor below the viewer's car
     bool treeOutlines = true;
@@ -52,7 +54,8 @@ public:
     // Once per simulation tick: skid marks + smoke emission.
     void onSimTick(const game::Track &track, const std::vector<game::CarView> &cars);
     // Queue all world draws for this frame (between beginFrame/endFrame).
-    // cameraTargetId: the car the camera follows (no motion blur on it).
+    // cameraTargetId: the car the camera follows (valley floor and the tree
+    // radius are centred on it).
     void draw(const std::vector<game::CarView> &cars, float frameDt, float time, int32_t cameraTargetId);
 
     uint32_t trackSeed() const { return seed_; }
@@ -94,7 +97,7 @@ private:
     void destroySection(SectionGfx &s);
     void loadCarModel(const std::string &name, CarModel &out);
     const CarModel &carModelFor(int look) const;
-    void drawCar(const game::CarView &car, CarAnim &anim, float dt, float time, bool cameraTarget);
+    void drawCar(const game::CarView &car, CarAnim &anim, float dt, float time);
     float rand01();
 
     gfx::Renderer &r_;
@@ -102,8 +105,6 @@ private:
     std::string treeSuffix_;
     uint32_t seed_ = 0;
     bool haveTrack_ = false;
-    uint32_t current_ = 0;
-    uint32_t treeLast_ = 0;    // last section that gets trees drawn
     std::map<uint32_t, SectionGfx> sections_;
     CarModel ae86_, rx7_;
     gfx::MeshHandle boxCar_ = 0;

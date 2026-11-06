@@ -481,11 +481,28 @@ void Client::Shutdown()
     }
 }
 
+#ifdef _WIN32
+// winmm's timer resolution, declared here to keep <windows.h> out.
+extern "C" __declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned int);
+extern "C" __declspec(dllimport) unsigned int __stdcall timeEndPeriod(unsigned int);
+#pragma comment(lib, "winmm.lib")
+#endif
+
 // Main loop; returns the process exit code. See the file header for the
 // fixed-step / render split.
 int Client::Run()
 {
     if (opt_.headless) return runHeadless();
+#ifdef _WIN32
+    // Windows sleeps in 15.6 ms ticks by default, so the 60 fps cap below
+    // overslept every frame to ~31 ms: the game ran at 30 fps (judder against
+    // the display, doubled motion blur). 1 ms ticks for the lifetime of the loop.
+    timeBeginPeriod(1);
+    struct TimerPeriod
+    {
+        ~TimerPeriod() { timeEndPeriod(1); }
+    } timerPeriod;
+#endif
     double last = nowSeconds();
     while (!quit_ && !glfwWindowShouldClose(window_))
     {
@@ -539,10 +556,16 @@ int Client::Run()
         glfwSwapBuffers(window_);
         // Frame cap: with software GL on XWayland swaps don't block on vsync,
         // and several uncapped windows flood the display server.
+        // Sleep in 1 ms steps and yield for the last 2 ms so frames stay
+        // evenly spaced (one long sleep can overshoot by a whole OS tick).
         if (opt_.fpsCap > 0)
         {
-            double budget = 1.0 / opt_.fpsCap, spent = nowSeconds() - now;
-            if (spent < budget) std::this_thread::sleep_for(std::chrono::duration<double>(budget - spent));
+            double until = now + 1.0 / opt_.fpsCap;
+            for (double t = nowSeconds(); t < until; t = nowSeconds())
+            {
+                if (until - t > 0.002) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                else std::this_thread::yield();
+            }
         }
     }
     return 0;

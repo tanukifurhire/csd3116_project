@@ -149,6 +149,8 @@ namespace {
 constexpr int kVertexFloats = 14; // pos3 nrm3 col3 uv2 smoothNrm3
 // Material flag bits stored per submesh in the .dmesh file.
 constexpr uint32_t kFlagDoubleSided = 1, kFlagNoOutline = 2, kFlagGlossy = 4, kFlagAlphaTest = 8;
+// car body paint (tagged by the asset converter): recoloured by DrawParams::paint
+constexpr uint32_t kFlagPaint = 16;
 
 // GPU-side mesh: VAO with static VBO/IBO plus object-space AABB. alive == false marks a free slot.
 struct GpuMesh
@@ -310,6 +312,9 @@ struct Renderer::Impl
     // screen effects
     FrameFx fx;
     bool fxSet = false;
+    // Camera-motion blur is measured as last frame -> this frame; this factor
+    // rescales it to a fixed 1/60 s exposure (see setFrameFx).
+    float blurDtScale = 1.0f;
     FxQuality quality;
     dm::Mat4 prevViewProj;
     bool havePrev = false;
@@ -823,22 +828,27 @@ struct Renderer::Impl
         uint32_t flags = 0;
         GLuint tex = 0;
         if (it.sub)
-        // Appends one overlay vertex (x y in pixels, then colour, then uv) to the current command.
-        // Sorted smoke/particle sprites: camera-facing quads built on the CPU each frame
-        // and streamed. Assumes blending is on and depth writes are off (set by endFrame).
         {
             std::memcpy(c, it.sub->color, sizeof c);
             em = it.sub->emission;
-            // sort back to front for correct alpha blending
-            // Axis-aligned solid rectangle (two triangles) from corner (x0,y0) to (x1,y1).
             flags = it.sub->flags;
             tex = it.sub->tex;
         }
-        // camera right / up axes are rows 0 and 1 of the view rotation
+        // Body paint: the player's colour replaces the material, vertex colour
+        // and texture outright (a solid colour, not a multiply over the
+        // original white paint), only on submeshes tagged as paint.
+        bool paint = it.params.usePaint && (flags & kFlagPaint) != 0;
+        if (paint)
+        {
+            c[0] = it.params.paint.x;
+            c[1] = it.params.paint.y;
+            c[2] = it.params.paint.z;
+            tex = 0;
+        }
         // albedo = material colour * per-draw tint; alpha = material alpha * per-draw alpha
         toon.vec4("uAlbedo", c[0] * it.params.tint.x, c[1] * it.params.tint.y, c[2] * it.params.tint.z,
-                  // 6 vertices x 9 floats (pos3 uv2 rgba4) per billboard
                   c[3] * it.params.alpha);
+        toon.i1("uPaint", paint ? 1 : 0);
         toon.vec3("uEmission", em);
         toon.i1("uHasTex", tex ? 1 : 0);
         toon.i1("uGlossy", (flags & kFlagGlossy) ? 1 : 0);
@@ -851,7 +861,6 @@ struct Renderer::Impl
         else glEnable(GL_CULL_FACE);
         glBindTexture(GL_TEXTURE_2D, tex ? tex : whiteTex);
         drawItemGeometry(it, *m);
-    // Uploads RGBA8 pixels as a HUD texture (optionally mipmapped) and caches it under key.
     }
 
     // Outline pass: inverted hull. Back faces are drawn (front faces culled) with
@@ -1154,7 +1163,8 @@ struct Renderer::Impl
         p.mat4("uInvViewProj", inv);
         // glow sprite buffer: pos3 uv2 rgba4 params2(kind, ring), stride 11 floats
         p.mat4("uPrevViewProj", havePrev ? prevViewProj : viewProj);
-        p.f1("uCamBlur", std::max(0.0f, fx.motionBlur) * 0.5f); // half the frame's motion
+        // half of a 60 Hz frame's motion, whatever the actual frame time
+        p.f1("uCamBlur", std::max(0.0f, fx.motionBlur) * 0.5f * blurDtScale);
         p.f1("uRadial", radialAmount());
         p.f1("uMaxBlur", 0.035f);
         p.i1("uScene", 0);
@@ -2215,6 +2225,14 @@ void Renderer::drawCarNitro(ModelHandle car, const dm::Mat4 &carModel, float int
 // Stores per-frame screen effect parameters (speed, nitro, blur...).
 void Renderer::setFrameFx(const FrameFx &fx)
 {
+    // The blur reprojects with last frame's matrix, so its length is the
+    // camera motion over one frame time: it doubled at 30 fps and jumped with
+    // every uneven frame (a hitch, a missed vsync), so the background flicked
+    // between sharp and smeared. Normalise it to a
+    // 1/60 s step using the frame time from consecutive fx.time stamps.
+    float dt = fx.time - impl_->fx.time;
+    impl_->blurDtScale =
+        (impl_->fxSet && dt > 1e-4f && dt < 0.25f) ? dm::clampf((1.0f / 60.0f) / dt, 0.25f, 6.0f) : 1.0f;
     impl_->fx = fx;
     impl_->fxSet = true;
 }
