@@ -79,6 +79,7 @@ void respawn(CarSimState &s, const Track &track, const CarParams &p)
     fresh.nitro = s.nitro;
     fresh.nitroRechargeScale = s.nitroRechargeScale;
     fresh.deaths = s.deaths;
+    fresh.takedowns = s.takedowns;
     fresh.rescues = s.rescues;
     fresh.ticks = s.ticks;
     fresh.ghostTimer = p.respawnGhostTime;
@@ -430,8 +431,8 @@ CarSimState fromNetState(const net::CarState &n)
     return s;
 }
 
-// 64-bit FNV-1a hash of the full sim state, for determinism checks and
-// comparing replayed runs in the tests.
+void wreckCar(CarSimState &s) { killCar(s); }
+
 uint64_t hashState(const CarSimState &s)
 {
     // FNV-1a over every field's bytes (field by field: no struct padding).
@@ -456,6 +457,7 @@ uint64_t hashState(const CarSimState &s)
     mix(&s.ghostTimer, 4); mix(&s.steerRamp, 4); mix(&s.lastGoodSection, 4); mix(&s.lastGoodS, 4);
     mix(&s.crashSpeed, 4); mix(&s.rescues, 4);
     mix(&s.deaths, 4); mix(&s.ticks, 4); mix(&s.wheelContactMask, 1);
+    mix(&s.takedowns, 4);
     return h;
 }
 

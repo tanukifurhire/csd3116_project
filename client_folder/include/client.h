@@ -234,6 +234,8 @@ private:
     dm::Vec3 cameraCarPos_;
     float fov_ = dm::radians(70.0f);
     float fxNitro_ = 0, fxSlip_ = 0;
+    float takedownFlash_ = 0; // > 0: "TAKEDOWN!" on the HUD (seconds left)
+    float shake_ = 0;         // camera shake amount 0..1 (takedowns / wrecks)
 
     game::ChaseCamera camera_;
     uint32_t cameraSeed_ = 0xffffffffu;

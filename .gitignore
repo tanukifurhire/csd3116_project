@@ -41,3 +41,4 @@ net_tests
 assets/
 bench_hot
 __pycache__/
+bot_bench

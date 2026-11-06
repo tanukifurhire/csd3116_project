@@ -72,11 +72,39 @@ pkg-config --exists glfw3 && echo "GLFW OK"
 
 **Compile the project**
 ```bash
-make all
+make certs assets   # DDS Security certificates + converted models/HUD (once)
+make all            # legacy server/client + drifto, api_server, game_server
 ```
-This compiles the project with all the necessary tools, libraries and links with OpenGL/GLFW/DDS. 
+This compiles the project with all the necessary tools, libraries and links with OpenGL/GLFW/DDS.
+Run every program from the repository root (it finds `certs/`, `assets/` and `net/config/` there).
 
-**Run the project**
+### Run the game (Drifto)
+
+```bash
+./api_server &                      # login + rooms, TCP 7600
+./game_server --tcp-port 8443 &     # game router, UDP 7700-7701 + TCP 8443 fallback
+./drifto --api 127.0.0.1            # menu -> ONLINE; start 2+ clients to race
+```
+Other modes, no servers needed:
+```bash
+./drifto --offline --bots 3         # race against bots
+./drifto --lan                      # LAN: rooms are discovered on the local network
+```
+Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting), Esc back.
+Lobby: H host / C create a room, Space ready, Enter start (host). Max 4 players per room.
+All players need the same `certs/` (or all use `--insecure`). See `docs/MULTIPLAYER.md`
+for deployment on a public server, ports and the LAN details.
+
+**Tests and profiling**
+```bash
+make check_game                     # 37 simulation tests (no GL, no DDS)
+make game_tests_asan && ./build/asan/game_tests
+make net_tests && ./net_tests       # 13 networking scenarios, starts its own servers
+make bench_hot && perf stat ./bench_hot bot 100   # hot-path benchmark (perf/)
+```
+
+### Run the course baseline (legacy server/client)
+
 For Client:
 ```bash
 ./client       # or ./client N for client cert N (1-4)

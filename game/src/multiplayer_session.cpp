@@ -231,6 +231,8 @@ void MultiplayerSession::beginMatch(uint32_t trackSeed, const std::vector<int32_
             hc.brain.cornerFactor = 0.73f + 0.06f * static_cast<float>(h & 0xff) / 255.0f;
             hc.brain.laneBias = (static_cast<float>((h >> 8) & 0xff) / 255.0f - 0.5f) * 1.5f;
             hc.brain.nitroMinGauge = 0.25f + 0.3f * static_cast<float>((h >> 16) & 0xff) / 255.0f;
+            hc.brain.seed = static_cast<uint32_t>(h >> 32);
+            hc.brain.takedownSpeed = raceParams_.takedownSpeed;
             cars_[id] = hc;
         }
         else if (id == localId_)
@@ -447,6 +449,11 @@ void MultiplayerSession::hostTick(const net::CarInput &localInput)
         hc.lastQueued = pi.input.tick;
     }
 
+    // What the bots see: every car still in the race, as it is now.
+    std::vector<BotOpponent> field;
+    for (auto &kv : cars_)
+        if (!race_.isEliminated(kv.first) && !kv.second.left) field.push_back({kv.first, &kv.second.state});
+
     std::vector<WorldCar> world;
     world.reserve(cars_.size());
     for (auto &kv : cars_)
@@ -461,7 +468,7 @@ void MultiplayerSession::hostTick(const net::CarInput &localInput)
             hc.lastApplied = localTick_;
         }
         else if (hc.bot)
-            in = racing ? hc.brain.drive(hc.state, track_, params_, hostTick_) : holdInput(hostTick_);
+            in = racing ? hc.brain.drive(hc.state, track_, params_, hostTick_, field) : holdInput(hostTick_);
         else
         {
             // Jitter buffer: one input per tick; a long queue (burst after a
@@ -850,11 +857,21 @@ void MultiplayerSession::reconcile(const net::CarState &cs)
     }
 }
 
-// Turn state changes of one simulated tick into audio/effect events: wreck,
-// barrier hit, car bump. The list is capped so it cannot grow unbounded when
-// nobody consumes it.
+void MultiplayerSession::setBotProfile(int32_t playerId, const BotProfile &profile)
+{
+    auto it = cars_.find(playerId);
+    if (it != cars_.end() && it->second.bot) it->second.brain.profile = profile;
+}
+
+const BotProfile *MultiplayerSession::botProfile(int32_t playerId) const
+{
+    auto it = cars_.find(playerId);
+    return it != cars_.end() && it->second.bot ? &it->second.brain.profile : nullptr;
+}
+
 void MultiplayerSession::collectContacts(int32_t id, const CarSimState &before, const CarSimState &after)
 {
+    if (after.takedownEvent == 1) contacts_.push_back({ContactEvent::Takedown, id, after.position, after.impactCar});
     if (before.alive && !after.alive)
         contacts_.push_back({ContactEvent::Wreck, id, after.position, std::max(after.impactWall, params_.crashImpactSpeed)});
     else if (after.impactWall > 1.0f)

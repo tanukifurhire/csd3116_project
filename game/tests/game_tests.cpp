@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "game/bench/old_bot.h"
 #include "game/include/autopilot.h"
 #include "game/include/car_physics.h"
 #include "game/include/chase_camera.h"
@@ -832,7 +833,11 @@ TEST(collision_no_tunnelling_at_closing_speed)
 {
     // 30 m/s faster car rams a slower one from behind, and a head-on pass
     // at 50 m/s closing: never ends up on the other side of the other car.
+    // (Takedowns off: a 30 m/s rear-end is now a takedown, the wrecked car
+    // is a ghost and is meant to be driven through -- see the takedown tests.)
     Track t(15, allStraights());
+    RaceParams noTakedowns;
+    noTakedowns.takedowns = false;
     for (float closing : {30.0f, 50.0f})
     {
         CarSimState fast = spawnCar(t, 2, 5.0f, 0.3f, 0.0f), slow = spawnCar(t, 2, 20.0f, 0.0f, 0.0f);
@@ -844,7 +849,7 @@ TEST(collision_no_tunnelling_at_closing_speed)
         for (int i = 0; i < 90; ++i)
         {
             std::vector<WorldCar> w{{1, &fast, holdInput(i), false}, {2, &slow, holdInput(i), false}};
-            stepWorld(w, t, defaultCarParams(), defaultRaceParams());
+            stepWorld(w, t, defaultCarParams(), noTakedowns);
             contact = contact || dm::length(fast.position - slow.position) < 2.0f * defaultCarParams().halfLength + 0.3f;
             float order = dm::dot(slow.position - fast.position, t.section(2).forwardAt(10.0f));
             if (std::fabs(fast.lateral - slow.lateral) < 1.5f && order < 0) passed = true;
@@ -890,6 +895,314 @@ TEST(collision_world_step_is_deterministic)
                 static_cast<unsigned long long>(ra.first));
     CHECK(ra.first == rb.first);
     CHECK(ra.second > 5);
+}
+
+
+// ---------------------------------------------------------------------------
+// takedowns and contact feel
+// ---------------------------------------------------------------------------
+
+namespace {
+// Two cars on a straight, `gap` metres apart along the road, both driving
+// straight ahead (throttle on), stepped together until `ticks` run out.
+struct RamResult
+{
+    uint32_t victimDeaths = 0, attackerDeaths = 0, attackerTakedowns = 0;
+    float attackerSpeedBefore = 0, attackerSpeedAfter = 0;
+    bool sawVictimEvent = false, sawAttackerEvent = false;
+};
+RamResult ram(float attackerSpeed, float victimSpeed, bool headOn, const RaceParams &race = defaultRaceParams())
+{
+    Track t(15, allStraights());
+    CarSimState att = spawnCar(t, 2, 10.0f, 0.0f, attackerSpeed), vic = spawnCar(t, 2, 13.6f, 0.0f, victimSpeed);
+    if (headOn) vic.velocity = dm::forwardOf(vic.rotation) * -victimSpeed; // coming the other way
+    RamResult r;
+    bool touched = false;
+    for (int i = 0; i < 120; ++i)
+    {
+        CarSimState before = att;
+        std::vector<WorldCar> w{{1, &att, driveInput(i, 0.0f, false), false}, {2, &vic, driveInput(i, 0.0f, false), false}};
+        stepWorld(w, t, defaultCarParams(), race);
+        if (!touched && att.impactCar > 0)
+        {
+            touched = true;
+            r.attackerSpeedBefore = before.speed;
+            r.attackerSpeedAfter = dm::length(att.velocity);
+        }
+        r.sawVictimEvent |= vic.takedownEvent == 2;
+        r.sawAttackerEvent |= att.takedownEvent == 1;
+    }
+    r.victimDeaths = vic.deaths;
+    r.attackerDeaths = att.deaths;
+    r.attackerTakedowns = att.takedowns;
+    return r;
+}
+} // namespace
+
+TEST(takedown_hard_rear_end_wrecks_the_victim_attacker_keeps_momentum)
+{
+    // 26 vs 12 m/s: ~14 m/s closing, all of it the attacker's => takedown.
+    RamResult r = ram(26.0f, 12.0f, false);
+    std::printf("    rear-end 26 -> 12 m/s: victim deaths %u, attacker takedowns %u, attacker %.1f -> %.1f m/s\n",
+                r.victimDeaths, r.attackerTakedowns, r.attackerSpeedBefore, r.attackerSpeedAfter);
+    CHECK(r.victimDeaths == 1 && r.sawVictimEvent);
+    CHECK(r.attackerTakedowns == 1 && r.sawAttackerEvent && r.attackerDeaths == 0);
+    CHECK_MSG(r.attackerSpeedAfter > 0.85f * r.attackerSpeedBefore, "attacker %.1f -> %.1f", r.attackerSpeedBefore,
+              r.attackerSpeedAfter);
+    // Below the threshold: an ordinary bump.
+    RamResult soft = ram(18.0f, 12.0f, false);
+    CHECK(soft.victimDeaths == 0 && soft.attackerTakedowns == 0 && !soft.sawVictimEvent);
+    // Equal head-on: nobody dominates => no takedown (it is just a big hit).
+    RamResult head = ram(12.0f, 12.0f, true);
+    CHECK(head.victimDeaths == 0 && head.attackerTakedowns == 0);
+    // Switched off: no takedown at any speed.
+    RaceParams off;
+    off.takedowns = false;
+    CHECK(ram(26.0f, 12.0f, false, off).victimDeaths == 0);
+}
+
+TEST(takedown_respects_proxies_and_is_deterministic)
+{
+    Track t(15, allStraights());
+    const CarParams &p = defaultCarParams();
+    auto pair = [&](CarSimState &a, CarSimState &b) {
+        a = spawnCar(t, 2, 20.0f - 2.0f * p.halfLength + 0.05f, 0.0f, 25.0f);
+        b = spawnCar(t, 2, 20.0f, 0.0f, 12.0f);
+    };
+    CarSimState a, b;
+    // Client predicting its attacking car against a proxy victim: the proxy
+    // is untouched (the host decides), our car scores and keeps going.
+    pair(a, b);
+    CarSimState b0 = b;
+    collideCars(a, false, b, true, p, defaultRaceParams());
+    CHECK(b.alive && sameBits(b.velocity, b0.velocity));
+    CHECK(a.takedownEvent == 1 && a.alive);
+    // Our car is the victim of a proxy: wrecked locally, like on the host.
+    pair(a, b);
+    CarSimState a0 = a;
+    collideCars(a, true, b, false, p, defaultRaceParams());
+    CHECK(!b.alive && b.crashed && b.takedownEvent == 2);
+    CHECK(sameBits(a.velocity, a0.velocity) && a.takedownEvent == 0);
+    // Same inputs => same bits.
+    CarSimState c, d, e, f;
+    pair(c, d);
+    pair(e, f);
+    collideCars(c, false, d, false, p, defaultRaceParams());
+    collideCars(e, false, f, false, p, defaultRaceParams());
+    CHECK(hashState(c) == hashState(e) && hashState(d) == hashState(f));
+}
+
+TEST(collision_hits_favour_the_hitter_light_touches_stay_symmetric)
+{
+    // Why contacts felt "glued": restitution 0.3 + Coulomb friction 0.35 left
+    // both cars with nearly the same sideways velocity after a hit (and our
+    // tyres have no grip to kill it), so they slid off together. Now real
+    // hits push the victim, not the hitter.
+    Track t(14, allStraights());
+    const float k = kCarScale;
+    auto sideHit = [&](float lateralSpeed, float &dA, float &dB) {
+        CarSimState a = spawnCar(t, 1, 10.0f, -0.6f * k, 18.0f), b = spawnCar(t, 1, 10.0f, 0.6f * k, 18.0f);
+        dm::Vec3 r = dm::rightOf(a.rotation);
+        a.velocity += r * lateralSpeed;
+        float a0 = dm::dot(a.velocity, r), b0 = dm::dot(b.velocity, r);
+        collideCars(a, false, b, false, defaultCarParams(), defaultRaceParams());
+        dA = std::fabs(dm::dot(a.velocity, r) - a0);
+        dB = std::fabs(dm::dot(b.velocity, r) - b0);
+    };
+    float dA, dB;
+    sideHit(2.0f, dA, dB);
+    std::printf("    side touch 2 m/s: hitter dv %.2f, hit car dv %.2f\n", dA, dB);
+    CHECK(std::fabs(dA - dB) < 1e-3f); // symmetric, momentum conserving
+    sideHit(8.0f, dA, dB);
+    std::printf("    side hit   8 m/s: hitter dv %.2f, hit car dv %.2f\n", dA, dB);
+    CHECK_MSG(dA < 0.6f * dB, "hitter %.2f vs victim %.2f", dA, dB);
+}
+
+TEST(wall_touch_prototype_is_off_by_default)
+{
+    CHECK(!defaultRaceParams().wallTouchWrecks);
+    // A 3 m/s brush along the barrier: survivable by default, a wreck with
+    // the prototype on.
+    for (bool proto : {false, true})
+    {
+        Track t(14, allStraights());
+        CarSimState c = spawnCar(t, 1, 10.0f, 3.5f, 18.0f);
+        c.velocity += t.section(1).rightAt(10.0f) * 3.0f;
+        RaceParams r;
+        r.wallTouchWrecks = proto;
+        r.wallTouchSpeed = 1.0f;
+        for (int i = 0; i < 60; ++i)
+        {
+            std::vector<WorldCar> w{{1, &c, holdInput(i), false}};
+            stepWorld(w, t, defaultCarParams(), r);
+        }
+        CHECK_MSG(c.deaths == (proto ? 1u : 0u), "prototype %d: %u deaths", proto, c.deaths);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reynolds bots
+// ---------------------------------------------------------------------------
+
+TEST(bot_behaviours_containment_separation_evasion)
+{
+    Track t(14, allStraights());
+    const TrackSection &sec = t.section(1);
+    // Containment: heading for the right barrier => feelers push left.
+    {
+        CarSimState c = spawnCar(t, 1, 10.0f, 2.5f, 18.0f);
+        c.velocity += sec.rightAt(10.0f) * 6.0f;
+        BotDriver b;
+        b.drive(c, t, defaultCarParams(), 0);
+        CHECK_MSG(dm::dot(b.debug.containment, sec.rightAt(10.0f)) < -1.0f, "containment %.2f",
+                  dm::dot(b.debug.containment, sec.rightAt(10.0f)));
+    }
+    // Separation: a car right alongside => pushed away from it.
+    {
+        CarSimState me = spawnCar(t, 1, 20.0f, -0.8f, 18.0f), other = spawnCar(t, 1, 20.0f, 1.0f, 18.0f);
+        BotDriver b;
+        b.drive(me, t, defaultCarParams(), 0, {{2, &other}});
+        CHECK(dm::dot(b.debug.separation, sec.rightAt(20.0f)) < -0.5f);
+    }
+    // Evasion: a car closing fast from behind in our lane => flee sideways.
+    {
+        CarSimState me = spawnCar(t, 1, 30.0f, 0.3f, 14.0f), rammer = spawnCar(t, 1, 22.0f, 0.0f, 27.0f);
+        BotDriver b;
+        b.profile = botPreset(BotPreset::Racer);
+        b.drive(me, t, defaultCarParams(), 0, {{2, &rammer}});
+        CHECK(b.debug.evading);
+        CHECK_MSG(dm::dot(b.debug.evasion, sec.rightAt(30.0f)) > 1.0f, "evasion %.2f",
+                  dm::dot(b.debug.evasion, sec.rightAt(30.0f))); // we are right of it: go right
+    }
+}
+
+TEST(bot_bully_hunts_for_takedowns_racer_overtakes)
+{
+    // A slow car (coasting, no throttle) ahead on a straight. The Bully
+    // pursues and rams it (takedown); the Racer goes round it cleanly.
+    for (BotPreset preset : {BotPreset::Bully, BotPreset::Racer})
+    {
+        Track t(21, allStraights());
+        CarSimState hunter = spawnCar(t, 1, 5.0f, 0.0f, 18.0f), slow = spawnCar(t, 1, 30.0f, 0.5f, 10.0f);
+        hunter.nitro = 1.0f;
+        BotDriver b;
+        b.profile = botPreset(preset);
+        bool pursued = false, overtook = false;
+        for (int i = 0; i < 60 * 6; ++i)
+        {
+            t.ensureGenerated(hunter.section + 12);
+            net::CarInput in = b.drive(hunter, t, defaultCarParams(), i, {{1, &hunter}, {2, &slow}});
+            pursued |= b.debug.pursuitTarget == 2;
+            overtook |= b.debug.overtaking;
+            std::vector<WorldCar> w{{1, &hunter, in, false}, {2, &slow, holdInput(i), false}};
+            stepWorld(w, t, defaultCarParams(), defaultRaceParams());
+        }
+        std::printf("    %s: pursued %d, overtook %d, takedowns %u, own wrecks %u, ahead by %.1f m\n",
+                    botPresetName(preset), pursued, overtook, hunter.takedowns, hunter.deaths, hunter.distance - slow.distance);
+        if (preset == BotPreset::Bully)
+            CHECK(pursued && hunter.takedowns >= 1 && slow.deaths >= 1);
+        else
+            CHECK(!pursued && overtook && hunter.takedowns == 0 && slow.deaths == 0 && hunter.distance > slow.distance);
+        CHECK(hunter.deaths == 0);
+    }
+}
+
+TEST(bot_reynolds_beats_the_old_planner_and_presets_differ)
+{
+    // Same seeds, 60 s solo: the new Racer wrecks no more than the frozen
+    // old bot and covers clearly more road; the Rookie is the crash-prone one.
+    double oldM = 0, newM = 0;
+    uint32_t oldW = 0, newW = 0, rookieW = 0;
+    for (uint32_t seed : {1000u, 1017u, 1034u})
+    {
+        Track t1(seed), t2(seed), t3(seed);
+        CarSimState a = spawnOnGrid(t1, 0), b = spawnOnGrid(t2, 0), c = spawnOnGrid(t3, 0);
+        bench::OldBot ob;
+        BotDriver nb, rb;
+        nb.profile = botPreset(BotPreset::Racer);
+        rb.profile = botPreset(BotPreset::Rookie);
+        for (int i = 0; i < 60 * 60; ++i)
+        {
+            t1.update(a.section);
+            t2.update(b.section);
+            t3.update(c.section);
+            stepCar(a, ob.drive(a, t1, defaultCarParams(), i), t1);
+            stepCar(b, nb.drive(b, t2, defaultCarParams(), i), t2);
+            stepCar(c, rb.drive(c, t3, defaultCarParams(), i), t3);
+        }
+        oldM += a.distance;
+        newM += b.distance;
+        oldW += a.deaths;
+        newW += b.deaths;
+        rookieW += c.deaths;
+    }
+    std::printf("    3 x 60 s: old %.0f m / %u wrecks, Reynolds Racer %.0f m / %u wrecks, Rookie %u wrecks\n", oldM, oldW,
+                newM, newW, rookieW);
+    CHECK(newW <= oldW);
+    CHECK_MSG(newM > 1.1 * oldM, "new %.0f m vs old %.0f m", newM, oldM);
+    CHECK(rookieW > newW);
+}
+
+TEST(bot_pack_race_is_deterministic)
+{
+    auto run = []() {
+        Track t(77);
+        std::vector<CarSimState> cars;
+        BotDriver bots[4];
+        const BotPreset ps[4] = {BotPreset::Rookie, BotPreset::Racer, BotPreset::Bully, BotPreset::Ace};
+        for (int i = 0; i < 4; ++i)
+        {
+            cars.push_back(spawnOnGrid(t, i));
+            bots[i].profile = botPreset(ps[i]);
+            bots[i].seed = 100u + static_cast<uint32_t>(i);
+        }
+        uint32_t takedowns = 0;
+        for (int k = 0; k < 60 * 30; ++k)
+        {
+            uint32_t maxSec = 0;
+            for (const CarSimState &c : cars) maxSec = std::max(maxSec, c.section);
+            t.ensureGenerated(maxSec + 14);
+            std::vector<BotOpponent> field;
+            for (int i = 0; i < 4; ++i) field.push_back({i + 1, &cars[i]});
+            std::vector<WorldCar> w;
+            for (int i = 0; i < 4; ++i) w.push_back({i + 1, &cars[i], bots[i].drive(cars[i], t, defaultCarParams(), k, field), false});
+            stepWorld(w, t, defaultCarParams(), defaultRaceParams());
+        }
+        uint64_t h = 1469598103934665603ull;
+        for (const CarSimState &c : cars) { h = (h ^ hashState(c)) * 1099511628211ull; takedowns += c.takedowns; }
+        return std::make_pair(h, takedowns);
+    };
+    auto a = run(), b = run();
+    std::printf("    30 s, Rookie/Racer/Bully/Ace: %u takedowns, hash %016llx\n", a.second,
+                static_cast<unsigned long long>(a.first));
+    CHECK(a.first == b.first);
+}
+
+TEST(session_bot_profiles_and_takedown_events)
+{
+    LoopbackTransport lb(1);
+    SessionConfig cfg;
+    cfg.countdownSeconds = 0.5f;
+    MultiplayerSession s(lb, cfg);
+    s.hostStartMatch(99, {1}, {2, 3, 4});
+    s.setBotProfile(2, botPreset(BotPreset::Bully));
+    s.setBotProfile(3, botPreset(BotPreset::Ace));
+    CHECK(s.botProfile(2) && std::strcmp(s.botProfile(2)->name, "Bully") == 0);
+    CHECK(s.botProfile(3) && std::strcmp(s.botProfile(3)->name, "Ace") == 0);
+    CHECK(s.botProfile(1) == nullptr); // the local player is not a bot
+    // The local car parks on the grid (no throttle): the bots come past it.
+    int takedownEvents = 0, wreckEvents = 0;
+    for (int i = 0; i < 60 * 20 && s.active(); ++i)
+    {
+        s.tick(holdInput(i));
+        for (const ContactEvent &e : s.takeContactEvents())
+        {
+            takedownEvents += e.kind == ContactEvent::Takedown;
+            wreckEvents += e.kind == ContactEvent::Wreck;
+        }
+    }
+    std::printf("    20 s offline with presets: %d takedown events, %d wreck events\n", takedownEvents, wreckEvents);
+    CHECK(takedownEvents <= wreckEvents); // every takedown has a wrecked victim
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,12 +1322,16 @@ TEST(offline_race_with_bots_runs_to_a_winner)
     const RaceInfo &ri = s.raceInfo();
     std::printf("    winner %d, order", ri.winnerId);
     for (int32_t id : ri.finishingOrder) std::printf(" %d", id);
-    std::printf(", racing %.0f s, mean spread %.1f m, nitro %d car-ticks, slipstream %d car-ticks\n", n / 60.0f,
-                spreadSum / n, nitroTicks, slipTicks);
+    std::printf(", racing %.0f s, mean spread %.1f m, nitro %d car-ticks, slipstream %d car-ticks, wrecks/takedowns",
+                n / 60.0f, spreadSum / n, nitroTicks, slipTicks);
+    for (int id = 1; id <= 4; ++id)
+        if (const CarSimState *c = s.hostCar(id)) std::printf(" %u/%u", c->deaths, c->takedowns);
+    std::printf("\n");
     CHECK(sawResults && !s.active());
     CHECK(ri.winnerId != 0 && ri.finishingOrder.size() == 4 && ri.finishingOrder.front() == ri.winnerId);
     CHECK(nitroTicks > 0 && slipTicks > 0);
-    CHECK_MSG(spreadSum / n < 60.0f, "mean spread %.1f m", spreadSum / n);
+    // (Was 60 m before takedowns: a takedown costs its victim ~30 m of road.)
+    CHECK_MSG(spreadSum / n < 90.0f, "mean spread %.1f m", spreadSum / n);
 }
 
 // ---------------------------------------------------------------------------

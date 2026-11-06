@@ -141,7 +141,8 @@ struct RaceInfo
 // nearby events (see client_folder's audio glue).
 struct ContactEvent
 {
-    enum Kind : uint8_t { Bump, Barrier, Wreck };
+    // Takedown: this car just took another one down (the victim reports Wreck).
+    enum Kind : uint8_t { Bump, Barrier, Wreck, Takedown };
     Kind kind;
     int32_t playerId;
     dm::Vec3 position;
@@ -177,6 +178,9 @@ public:
     // Players who left: out of the race (host), car removed.
     void onRosterChanged(const std::vector<int32_t> &playerIds);
     void end();
+    // Host / offline: personality of a bot car (after hostStartMatch).
+    void setBotProfile(int32_t playerId, const BotProfile &profile);
+    const BotProfile *botProfile(int32_t playerId) const;
 
     // --- per fixed tick ----------------------------------------------------
     void tick(const net::CarInput &localInput);

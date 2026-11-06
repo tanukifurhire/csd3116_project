@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "game/include/bot_driver.h"
 #include "game/include/car_physics.h"
 #include "game/include/track.h"
 #include "net/include/net_client.h"
@@ -35,11 +36,51 @@ struct RaceParams
     float slipstreamMaxHeight = 2.0f;
 
     // --- car-to-car collisions (oriented boxes in the road plane) ----------
+    // Crash feel (spinScale was 1.4). Our tyres have no grip, so whatever
+    // sideways velocity a contact leaves is kept: with e = 0.3 both cars
+    // leave a sideswipe with similar sideways speed and slide off together
+    // (re-touching for ~5 ticks), and spinScale 1.4 -- spin decays slowly,
+    // 2.2/s -- yawed BOTH cars ~28 deg in a 3 m/s passing bump: that is what
+    // made recovering hard. spinScale 0.7 halves the yaw kick; the ram bias
+    // below keeps a real hitter on its line. (e = 0.5 separated a sideswipe
+    // in one tick, but against the client's immovable proxies it doubled
+    // the predicted bump count -- jittery online -- so e stays 0.3.)
     float restitution = 0.3f;
     float friction = 0.35f;
-    float spinScale = 1.4f;            // yaw from off-centre hits (feeds CarSimState::spinRate)
+    float spinScale = 0.7f;            // yaw from off-centre hits (feeds CarSimState::spinRate)
     float maxHeightDiff = 1.3f * kCarScale; // cars on different levels don't touch
     float penetrationSlop = 0.01f;
+    // Contact feel. Real hits (closing speed along the normal above
+    // rammingSpeed) favour the car that did the hitting: it acts up to
+    // (1 + ramBias) / (1 - ramBias) times heavier, so it is not dragged off
+    // its line and the victim takes the impact. Light touches stay
+    // symmetric (momentum conserving).
+    float rammingSpeed = 4.0f;      // m/s: bias starts here...
+    float rammingSpeedFull = 10.0f; // ...and is full here
+    float ramBias = 0.5f;           // 0 = always symmetric
+
+    // --- takedowns ----------------------------------------------------------------
+    // A car hit much harder than it hits back is WRECKED (the barrier-wreck
+    // path: dead, ghosted, respawned) when the closing speed along the
+    // contact normal is >= takedownSpeed and the attacker supplies enough of
+    // it: dominance = (attacker approach - victim approach) / closing must be
+    // >= takedownDominance (rear-end > 1, T-bone 1, equal head-on 0), and
+    // the attacker must be clearly faster overall. Speeds are the bodies'
+    // (centre of mass), so a spinning car's swinging tail is no ram. The
+    // attacker only takes takedownAttackerShare of the impulse (it keeps
+    // most of its momentum).
+    bool takedowns = true;
+    float takedownSpeed = 9.0f;
+    float takedownDominance = 0.5f;
+    float takedownSpeedAdvantage = 3.0f; // attacker |v| - victim |v| (m/s): clearly faster
+    float takedownAim = 0.6f;            // attacker approach / its speed: cos(travel, normal)
+    float takedownAttackerShare = 0.2f;
+
+    // --- prototype (OFF by default): barrier touches wreck ------------------
+    // When on, any barrier impact faster than wallTouchSpeed (m/s into the
+    // wall) wrecks the car; CarParams::crashImpactSpeed applies regardless.
+    bool wallTouchWrecks = false;
+    float wallTouchSpeed = 1.0f;
 
     // --- elimination ----------------------------------------------------------------
     float stageTimes[6] = {32, 16, 8, 4, 2, 1};
@@ -71,7 +112,8 @@ void stepWorld(std::vector<WorldCar> &cars, const Track &track, const CarParams 
 // Building blocks (exposed for tests).
 bool inSlipstream(const CarSimState &follower, const CarSimState &leader, const RaceParams &race);
 // Resolves one pair; returns true if they were touching. Responses are only
-// applied to non-proxy cars.
+// applied to non-proxy cars. A hard enough, one-sided hit is a takedown
+// (RaceParams::takedowns): the victim is wrecked, both get takedownEvent.
 bool collideCars(CarSimState &a, bool aProxy, CarSimState &b, bool bProxy, const CarParams &params,
                  const RaceParams &race);
 
@@ -148,25 +190,7 @@ private:
     uint8_t eliminatedCount_ = 0;
 };
 
-// Race bot: drives drifto's frictionless car by look-ahead -- it simulates
-// its own car (stepCar is cheap and deterministic) for a few two-stage
-// steering plans and keeps the one that stays off the barriers, is not too
-// fast for the next hairpin and makes the most progress. Ignores other cars.
-struct BotDriver
-{
-    float cornerFactor = 0.76f; // corner speed target sqrt(drive * R * f)
-    float speedLook = 40.0f;    // metres past the plan scanned for the tightest curve
-    float nitroMinGauge = 0.35f;
-    float laneBias = 0.0f;      // preferred lateral offset (variety between bots)
-    int replanTicks = 5;
-
-    float steer1 = 0, steer2 = 0;
-    int ticksLeft = 0;
-    // Recovery: stuck (e.g. nose against a wall) => hold full lock towards
-    // the road direction for a moment instead of dithering.
-    float stuckTime = 0, recoverTime = 0, recoverSteer = 0;
-
-    net::CarInput drive(const CarSimState &car, const Track &track, const CarParams &params, uint32_t tick);
-};
+// Race bot: see bot_driver.h (Reynolds steering behaviours + look-ahead
+// safety layer).
 
 } // namespace game

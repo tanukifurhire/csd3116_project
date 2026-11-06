@@ -578,6 +578,10 @@ void Client::startOfflineRun()
     std::vector<int32_t> bots;
     for (int i = 0; i < std::clamp(opt_.bots, 1, 3); ++i) bots.push_back(2 + i);
     offline_->hostStartMatch(seed, {1}, bots);
+    // A mix of bot personalities, rotated by the track seed.
+    const game::BotPreset mix[4] = {game::BotPreset::Ace, game::BotPreset::Bully, game::BotPreset::Racer,
+                                    game::BotPreset::Rookie};
+    for (size_t i = 0; i < bots.size(); ++i) offline_->setBotProfile(bots[i], game::botPreset(mix[(seed + i) % 4]));
     demoBot_ = game::BotDriver{};
     offlineCounted_ = false;
     if (!opt_.headless && !opt_.demo) saveSettings("offline");
@@ -1257,9 +1261,18 @@ void Client::drawWorld(const game::Track &track, const std::vector<game::CarView
     float fovTarget = racing ? gfx::speedFovY(speed01, fxNitro_) : dm::radians(55.0f);
     fov_ += (fovTarget - fov_) * (1.0f - std::exp(-6.0f * dt));
 
+    // Takedown / wreck camera shake: decays in ~0.5 s, render-only.
+    takedownFlash_ = std::fmax(0.0f, takedownFlash_ - dt);
+    shake_ = std::fmax(0.0f, shake_ - 2.0f * dt);
+    dm::Vec3 shake{0, 0, 0};
+    if (shake_ > 0 && racing)
+    {
+        float a = 0.35f * shake_ * shake_, t = static_cast<float>(time_);
+        shake = {a * std::sin(t * 61.0f), a * 0.6f * std::sin(t * 47.0f + 1.3f), a * std::sin(t * 53.0f + 2.1f)};
+    }
     gfx::Camera cam;
-    cam.position = camera_.position;
-    cam.target = camera_.target;
+    cam.position = camera_.position + shake;
+    cam.target = camera_.target + shake * 0.5f;
     cam.up = camera_.up;
     cam.fovY = fov_;
     cam.zFar = 900.0f;
@@ -1403,6 +1416,12 @@ void Client::playContacts(game::MultiplayerSession &s)
     const float carMass = 1000.0f; // kg, for the impulse scale the mixer expects
     for (const game::ContactEvent &e : s.takeContactEvents())
     {
+        // Takedown feedback for OUR car (presentation only, never the sim).
+        if (e.playerId == s.localId())
+        {
+            if (e.kind == game::ContactEvent::Takedown) { takedownFlash_ = 1.4f; shake_ = 1.0f; }
+            else if (e.kind == game::ContactEvent::Wreck) shake_ = std::fmax(shake_, 0.7f);
+        }
         bool dup = false;
         for (const RecentHit &h : recentHits_)
             dup = dup || (time_ - h.time < 0.3 && dm::length(h.position - e.position) < 6.0f);
@@ -1415,6 +1434,7 @@ void Client::playContacts(game::MultiplayerSession &s)
         case game::ContactEvent::Bump: snd_->playBump(e.position, impulse); break;
         case game::ContactEvent::Barrier: snd_->playCrash(e.position, impulse); break;
         case game::ContactEvent::Wreck: snd_->playCrash(e.position, std::fmax(impulse, 12000.0f)); break;
+        case game::ContactEvent::Takedown: snd_->playCrash(e.position, 16000.0f); break;
         }
     }
     recentHits_.erase(std::remove_if(recentHits_.begin(), recentHits_.end(),
@@ -1616,6 +1636,12 @@ void Client::drawRaceHud(game::MultiplayerSession &s, const std::vector<game::Ca
     }
     if (me && !me->alive && !spectating && phase == net::MatchPhase::Racing)
         textCentred(W * 0.5f, H * 0.42f, 5.0f * sc, "WRECKED!", kRed);
+    if (takedownFlash_ > 0 && phase == net::MatchPhase::Racing)
+    {
+        float k = std::fmin(1.0f, takedownFlash_ / 0.4f); // fades over the last 0.4 s
+        float grow = 1.0f + 0.25f * std::fmax(0.0f, takedownFlash_ - 1.1f) / 0.3f; // punch in
+        textCentred(W * 0.5f, H * 0.3f, 7.0f * sc * grow, "TAKEDOWN!", dm::lerp(kWhite, kYellow, k));
+    }
     // No snapshots: the host stalled or left. Keep driving (prediction) and
     // say so; NET promotes a new host after its session timeout.
     if (online && s.secondsSinceSnapshot() > 1.0f)

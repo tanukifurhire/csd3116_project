@@ -23,6 +23,7 @@
 #include "game/include/car_physics.h"
 #include "game/include/race.h"
 #include "game/include/track.h"
+#include "game/bench/old_bot.h" // frozen pre-rewrite bot: keeps the measured workload fixed
 
 using namespace game;
 
@@ -54,8 +55,11 @@ void addCar(Checksum &c, const CarSimState &s)
 
 constexpr int kTicks = 600; // 10 s of racing at 60 Hz
 
-// One bot racing alone: the per-tick cost is dominated by BotDriver::drive's
-// look-ahead (it re-simulates its own car for 25 steering plans every 5 ticks).
+// One bot racing alone: the per-tick cost is dominated by the bot's look-ahead
+// (it re-simulates its own car for 25 steering plans every 5 ticks). The bots
+// here are the frozen original planner (game/bench/old_bot.h), so the workload
+// and its checksum stay exactly what the slides measured, even after the
+// Reynolds bot rewrite.
 uint64_t benchBot(int runs)
 {
     Checksum c;
@@ -64,7 +68,7 @@ uint64_t benchBot(int runs)
     {
         Track t(1000u + r);
         CarSimState car = spawnOnGrid(t, 0, p);
-        BotDriver bot;
+        bench::OldBot bot;
         for (uint32_t tick = 0; tick < kTicks; ++tick)
         {
             net::CarInput in = bot.drive(car, t, p, tick);
@@ -86,7 +90,7 @@ uint64_t benchWorld(int runs)
     {
         Track t(2000u + r);
         CarSimState cars[4];
-        BotDriver bots[4];
+        bench::OldBot bots[4];
         std::vector<WorldCar> world(4);
         for (int i = 0; i < 4; ++i)
         {

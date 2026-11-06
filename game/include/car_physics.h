@@ -201,6 +201,11 @@ struct CarSimState
     // car impulse this tick (m/s change), 0 when nothing happened.
     float impactWall = 0;
     float impactCar = 0;
+    // Takedowns (stepWorld / collideCars; local-only like impactCar -- the
+    // wreck itself replicates through the alive / crashed flags):
+    // per-tick event 1 = this car took another down, 2 = it was taken down.
+    uint8_t takedownEvent = 0;
+    uint32_t takedowns = 0;   // takedowns scored (survives respawns)
     uint32_t ticks = 0;
     uint8_t wheelContactMask = 0; // bit i = wheel i touching the road
     dm::Vec3 wheelContact[4];     // contact points (valid per mask)
@@ -239,6 +244,11 @@ inline net::CarInput holdInput(uint32_t tick)
     in.tick = tick;
     return in;
 }
+
+// Wreck the car now (the same path a hard barrier impact takes: dead,
+// crashed, respawn after respawnDelay). Used by stepWorld for takedowns and
+// the wall-touch prototype. No-op on a car that is already wrecked.
+void wreckCar(CarSimState &state);
 
 // --- conversions for the network layer --------------------------------------
 // place / eliminatedOrder are filled in by the race logic.

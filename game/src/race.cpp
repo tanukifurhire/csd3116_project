@@ -179,17 +179,52 @@ bool collideCars(CarSimState &a, bool aProxy, CarSimState &b, bool bProxy, const
     Vec2f vrel = sub2(pointVelocity(b, rb), pointVelocity(a, ra));
     float vn = dot2(vrel, n);
     if (vn >= 0) return true; // already separating
+    const float closing = -vn;
+
+    // Who is doing the hitting: each car's own speed towards the other.
+    // dominance > 0 = A is the attacker; |dominance| >= 1: the victim was
+    // standing still or moving away along the normal (rear-end, T-bone).
+    const float approachA = dot2(v2(a.velocity), n), approachB = -dot2(v2(b.velocity), n);
+    const float dominance = (approachA - approachB) / closing;
+    const bool aAttacks = dominance > 0;
+    const float dom = std::fabs(dominance);
+
+    // Ram bias: in a real hit the attacker acts heavier, so it is not
+    // dragged off its line and the victim takes the impact.
+    float bias = 0;
+    if (r.ramBias > 0 && closing > r.rammingSpeed)
+        bias = r.ramBias * dm::clampf((closing - r.rammingSpeed) / std::fmax(r.rammingSpeedFull - r.rammingSpeed, 1e-3f), 0.0f, 1.0f) *
+               dm::clampf(dom, 0.0f, 1.0f);
     const float invM = 1.0f / p.mass, invI = 1.0f / p.inertia.y;
+    const float wa = aAttacks ? 1.0f - bias : 1.0f + bias, wb = aAttacks ? 1.0f + bias : 1.0f - bias;
+    const float invMa = invM * wa, invMb = invM * wb, invIa = invI * wa, invIb = invI * wb;
+
     float rna = cross2(ra, n), rnb = cross2(rb, n);
-    float kn = 2.0f * invM + rna * rna * invI + rnb * rnb * invI;
+    float kn = invMa + invMb + rna * rna * invIa + rnb * rnb * invIb;
     float jn = -(1.0f + r.restitution) * vn / kn;
 
     // Coulomb friction along the sliding direction.
     Vec2f vt = sub2(vrel, mul2(n, vn));
     Vec2f t = norm2(vt);
     float rta = cross2(ra, t), rtb = cross2(rb, t);
-    float kt = 2.0f * invM + rta * rta * invI + rtb * rtb * invI;
+    float kt = invMa + invMb + rta * rta * invIa + rtb * rtb * invIb;
     float jt = dm::clampf(-dot2(vrel, t) / kt, -r.friction * jn, r.friction * jn);
+
+    // Takedown: a hard, one-sided hit wrecks the victim; the attacker only
+    // feels takedownAttackerShare of the impulse and keeps its momentum.
+    // Measured on the bodies (centre-of-mass velocities), not the contact
+    // point: a spinning, drifting car's corners must not count as a ram.
+    const float closingBody = approachA + approachB;
+    const float speedA = std::sqrt(dot2(v2(a.velocity), v2(a.velocity))), speedB = std::sqrt(dot2(v2(b.velocity), v2(b.velocity)));
+    const float advantage = aAttacks ? speedA - speedB : speedB - speedA;
+    // ...and it has to be a ram: the attacker drives INTO the other car
+    // (its travel direction close to the contact normal), not two drifting
+    // cars rubbing sideways through a corner.
+    const float aim = aAttacks ? approachA / std::fmax(speedA, 1e-3f) : approachB / std::fmax(speedB, 1e-3f);
+    const bool takedown = r.takedowns && closingBody >= r.takedownSpeed && dom >= r.takedownDominance &&
+                          advantage >= r.takedownSpeedAdvantage && aim >= r.takedownAim;
+    const float shareA = takedown && aAttacks ? r.takedownAttackerShare : 1.0f;
+    const float shareB = takedown && !aAttacks ? r.takedownAttackerShare : 1.0f;
 
     Vec2f J = add2(mul2(n, jn), mul2(t, jt)); // impulse on B (A gets -J)
     float jMag = std::sqrt(dot2(J, J)) * invM;
@@ -198,15 +233,30 @@ bool collideCars(CarSimState &a, bool aProxy, CarSimState &b, bool bProxy, const
     // Yaw goes into the spin rate (the body's angular drag would erase it).
     if (!aProxy)
     {
-        a.velocity.x -= J.x * invM;
-        a.velocity.z -= J.z * invM;
-        a.spinRate = dm::clampf(a.spinRate - cross2(ra, J) * invI * r.spinScale, -p.maxSpinRate, p.maxSpinRate);
+        a.velocity.x -= J.x * invMa * shareA;
+        a.velocity.z -= J.z * invMa * shareA;
+        a.spinRate = dm::clampf(a.spinRate - cross2(ra, J) * invIa * shareA * r.spinScale, -p.maxSpinRate, p.maxSpinRate);
     }
     if (!bProxy)
     {
-        b.velocity.x += J.x * invM;
-        b.velocity.z += J.z * invM;
-        b.spinRate = dm::clampf(b.spinRate + cross2(rb, J) * invI * r.spinScale, -p.maxSpinRate, p.maxSpinRate);
+        b.velocity.x += J.x * invMb * shareB;
+        b.velocity.z += J.z * invMb * shareB;
+        b.spinRate = dm::clampf(b.spinRate + cross2(rb, J) * invIb * shareB * r.spinScale, -p.maxSpinRate, p.maxSpinRate);
+    }
+    if (takedown)
+    {
+        CarSimState &attacker = aAttacks ? a : b, &victim = aAttacks ? b : a;
+        const bool attackerProxy = aAttacks ? aProxy : bProxy, victimProxy = aAttacks ? bProxy : aProxy;
+        if (!victimProxy)
+        {
+            wreckCar(victim);
+            victim.takedownEvent = 2;
+        }
+        if (!attackerProxy)
+        {
+            attacker.takedownEvent = 1;
+            ++attacker.takedowns;
+        }
     }
     return true;
 }
@@ -239,8 +289,12 @@ void stepWorld(std::vector<WorldCar> &cars, const Track &track, const CarParams 
     for (WorldCar *c : order)
         if (!c->proxy)
         {
-            stepCar(*c->state, c->input, track, params, dt);
-            c->state->impactCar = 0;
+            CarSimState &s = *c->state;
+            stepCar(s, c->input, track, params, dt);
+            s.impactCar = 0;
+            s.takedownEvent = 0;
+            // Prototype (off by default): any real barrier touch wrecks.
+            if (race.wallTouchWrecks && s.alive && s.impactWall > race.wallTouchSpeed) wreckCar(s);
         }
     // 3) Car-to-car contacts, pairs in id order (two passes for 3-4 car piles).
     bool touched = false;
@@ -488,100 +542,6 @@ std::vector<EliminationRace::Event> EliminationRace::update(const std::vector<Pr
     timer_ -= dt;
     if (timer_ <= 0) eliminate(lastPlaceId_, events);
     return events;
-}
-
-// ---------------------------------------------------------------------------
-// bot
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// Largest |curvature| (1/m) of the track within `to` metres ahead, sampled
-// every 4 m while stepping across section boundaries.
-float maxCurvatureAhead(const CarSimState &s, const Track &t, float to)
-{
-    float m = 0;
-    for (float a = 0; a <= to; a += 4.0f)
-    {
-        float sc = s.sectionS + a;
-        uint32_t k = s.section;
-        while (k + 1 < t.sectionCount() && sc > t.section(k).length) { sc -= t.section(k).length; ++k; }
-        m = std::fmax(m, std::fabs(t.section(k).curvature()));
-    }
-    return m;
-}
-
-} // namespace
-
-// Bot control: every replanTicks, brute-force search of 5x5 steering pairs
-// (a for the first h1 ticks, then b for h2 ticks) by simulating a copy of
-// the car with stepCar(); pick the best score. Falls back to a timed
-// recovery manoeuvre when stuck. Returns the input for this tick.
-net::CarInput BotDriver::drive(const CarSimState &car, const Track &track, const CarParams &params, uint32_t tick)
-{
-    const int h1 = 15, h2 = 30;
-    const float dt = kFixedDt;
-    if (recoverTime > 0)
-    {
-        recoverTime -= dt;
-        return driveInput(tick, recoverSteer, false);
-    }
-    stuckTime = car.alive && car.speed < 3.0f ? stuckTime + dt : 0.0f;
-    if (stuckTime > 0.7f)
-    {
-        // Turn the nose towards the road's direction (steer + = right).
-        const TrackSection &sec = track.section(car.section);
-        dm::Vec3 f = dm::forwardOf(car.rotation);
-        float headingYaw = std::atan2(-f.x, -f.z);
-        float err = dm::wrapAngle(sec.yawAt(car.sectionS) - headingYaw); // + = road is to our left
-        recoverSteer = err > 0 ? -1.0f : 1.0f;
-        recoverTime = 1.2f;
-        stuckTime = 0;
-        ticksLeft = 0;
-        return driveInput(tick, recoverSteer, false);
-    }
-    if (ticksLeft <= 0)
-    {
-        const float cand[5] = {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f};
-        float best = -1e30f;
-        for (float a : cand)
-            for (float b : cand)
-            {
-                CarSimState s = car;
-                float score = 0;
-                bool dead = false;
-                for (int k = 0; k < h1 + h2 && !dead; ++k)
-                {
-                    stepCar(s, driveInput(0, k < h1 ? a : b, false), track, params);
-                    if (!s.alive) { score = -1e4f + 10.0f * k; dead = true; }
-                }
-                if (!dead)
-                {
-                    // Progress, minus: hugging the barriers, being too fast
-                    // for the next curve, pointing away from the road, and
-                    // straying from this bot's preferred lane.
-                    float edge = track.edgeOffset();
-                    float over = std::fmax(0.0f, std::fabs(s.lateral) - (edge - 2.2f));
-                    float k = maxCurvatureAhead(s, track, speedLook);
-                    float vmax = k > 1e-4f ? std::sqrt(params.driveForce * cornerFactor / k) : 1e9f;
-                    float fast = std::fmax(0.0f, s.speed - vmax);
-                    float travelYaw = std::atan2(-s.velocity.x, -s.velocity.z);
-                    float yawErr = std::fabs(dm::wrapAngle(travelYaw - track.section(s.section).yawAt(s.sectionS)));
-                    float lane = s.lateral - laneBias;
-                    score = (s.distance - car.distance) - 3.0f * over * over - fast * fast - 2.0f * yawErr -
-                            0.05f * lane * lane;
-                }
-                if (score > best) { best = score; steer1 = a; steer2 = b; }
-            }
-        ticksLeft = replanTicks;
-    }
-    --ticksLeft;
-    // Nitro when well under the speed the road ahead allows (it costs
-    // steering, so not mid-slide).
-    float kAhead = maxCurvatureAhead(car, track, 35.0f);
-    float vAllowed = kAhead > 1e-4f ? std::sqrt(params.driveForce * cornerFactor / kAhead) : 1e9f;
-    bool nitro = car.nitro > nitroMinGauge && std::fabs(car.driftAngle) < 30.0f && car.speed < vAllowed - 2.0f;
-    return driveInput(tick, steer1, nitro);
 }
 
 } // namespace game

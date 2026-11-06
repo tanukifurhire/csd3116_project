@@ -42,3 +42,8 @@ $(ASAN_BUILD)/game_tests: $(GAME_TEST_SRCS:%.cpp=$(ASAN_BUILD)/%.o) $(ASAN_GAME_
 drifto_asan: $(ASAN_BUILD)/drifto
 $(ASAN_BUILD)/drifto: $(ASAN_CLIENT_OBJS) $(ASAN_GAME_OBJS) $(ASAN_GFX_OBJS) $(ASAN_NET_OBJS) $(ASAN_NET_GEN)/drifto_net.o $(ASAN_AUDIO_OBJS)
 	$(CXX) $(ASAN_FLAGS) -o $@ $^ $(GLFW_LIBS) -lGL -ldl $(DDS_LIBS) $(OPENSSL_LIBS) -pthread -lm
+
+# Bot benchmark (headless): make bot_bench && ./bot_bench [seeds] [seconds] [scenario]
+BOT_BENCH_OBJS := $(BUILD)/game/bench/bot_bench.o
+bot_bench: $(BOT_BENCH_OBJS) $(GAME_SRCS:%.cpp=$(BUILD)/%.o)
+	$(CXX) -o $@ $^ -lm
