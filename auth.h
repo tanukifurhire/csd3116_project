@@ -24,4 +24,8 @@ bool auth_init(const char *path);
 // Thread-safe (internal mutex). Never logs or stores the plaintext password.
 AuthResult auth_authenticate(const char *username, const char *password);
 
+// auth_authenticate() that also reports whether this call created the account
+// (*registered = true) or matched an existing one (false). 'registered' may be NULL.
+AuthResult auth_authenticate_ex(const char *username, const char *password, bool *registered);
+
 #endif

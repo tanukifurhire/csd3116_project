@@ -72,11 +72,22 @@ pkg-config --exists glfw3 && echo "GLFW OK"
 
 **Compile the project**
 ```bash
-make certs assets   # DDS Security certificates + converted models/HUD (once)
+make certs assets   # DDS Security certificates (only if certs/ is missing) + converted models/HUD (once)
 make all            # legacy server/client + drifto, api_server, game_server
 ```
 This compiles the project with all the necessary tools, libraries and links with OpenGL/GLFW/DDS.
 Run every program from the repository root (it finds `certs/`, `assets/` and `net/config/` there).
+
+**Certificates (`certs/`) -- keep the provided ones for online play.** The
+submission includes our team's DDS Security certificates in `certs/`. Our online
+servers (`--api 121.6.130.7`) authenticate every client against the CA in that
+folder, so the provided certs are what let you log in there; a client with
+newly generated certs fails the DDS handshake and reports the API server as
+unreachable. `make certs` leaves an existing `certs/` alone and `make clean` no
+longer deletes it. Only run `make clean-certs certs` if you want a fresh set
+for your own local servers -- you then can't join ours. The CA's private key is
+not included; the server cert/key are, so local servers built from this folder
+work with the same certs.
 
 ### Run the game (Drifto)
 
@@ -84,7 +95,13 @@ Run every program from the repository root (it finds `certs/`, `assets/` and `ne
 ./api_server &                      # login + rooms, TCP 7600
 ./game_server --tcp-port 8443 &     # game router, UDP 7700-7701 + TCP 8443 fallback
 ./drifto --api 127.0.0.1            # menu -> ONLINE PLAY; start 2+ clients to race
+./drifto --api 121.6.130.7          # or play on our online servers (needs the provided certs/)
 ```
+**Logging in online:** there is no server password. The password is your own: the
+first login with a new name creates that account with the password you type, and
+later logins with that name must use the same password ("wrong password" means the
+name is already taken -- pick another). Each client needs a different name; two
+clients on one PC can use the same `certs/` (or `--cert 2` for the second).
 Other modes, no servers needed:
 ```bash
 ./drifto --offline --bots 3         # race against bots
@@ -94,7 +111,7 @@ Other modes, no servers needed:
 Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting; a burn needs 5% to start), Esc back.
 In the menus, room list and lobby A/D or Left/Right picks your car (AE86 / RX-7, same physics; remembered).
 Lobby: H host / C create a room, Space ready, Enter start (host). Max 4 players per room.
-All players need the same `certs/` (or all use `--insecure`). See `docs/MULTIPLAYER.md`
+All players and servers need the same `certs/` (or all use `--insecure`). See `docs/MULTIPLAYER.md`
 for deployment on a public server, ports and the LAN details.
 
 **Tests and profiling**
@@ -143,7 +160,8 @@ Windows than from WSL2, because WSL2's NAT networking blocks LAN multicast.
   servers' 0.10.4). This takes about 15–30 minutes once. Later builds reuse the binary cache in
   `%LOCALAPPDATA%\vcpkg\archives`.
 - Linux side (for the runtime files): `make assets` and `make certs` in WSL.
-  `assets/` and `certs/` are not in git; the sync script copies them over.
+  `assets/` and `certs/` are not in git (the submission zip includes `certs/`);
+  the sync script copies them over.
 
 ### Build
 

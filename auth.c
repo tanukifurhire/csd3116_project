@@ -200,7 +200,16 @@ static bool append_entry(const AuthEntry *entry)
 // hash with the stored salt/iterations and compare in constant time.
 AuthResult auth_authenticate(const char *username, const char *password)
 {
+	return auth_authenticate_ex(username, password, NULL);
+}
+
+// Same as auth_authenticate(); *registered (if given) is set true only when this
+// call created the account, so a caller can tell a new player from a returning one.
+AuthResult auth_authenticate_ex(const char *username, const char *password, bool *registered)
+{
 	AuthResult result;
+
+	if (registered) *registered = false;
 
 	pthread_mutex_lock(&g_mutex);
 
@@ -228,6 +237,7 @@ AuthResult auth_authenticate(const char *username, const char *password)
 			{
 				g_entries[g_num_entries++] = entry;
 				result = AUTH_OK;
+				if (registered) *registered = true;
 			}
 			else
 			{

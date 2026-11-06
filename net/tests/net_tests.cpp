@@ -406,7 +406,7 @@ void scenarioLogin()
     Event e;
     bool ok;
     b->nc.login("alice", "wrong");
-    ok = b->wait(EventType::LoginFailed, 8000, &e) && e.message == "bad password";
+    ok = b->wait(EventType::LoginFailed, 8000, &e) && e.message.find("wrong password") != std::string::npos;
     check(ok, "bad password rejected: \"" + e.message + "\"");
     c->nc.login("alice", "pw-alice");
     ok = c->wait(EventType::LoginFailed, 8000, &e) && e.message.find("already") != std::string::npos;
@@ -417,7 +417,8 @@ void scenarioLogin()
     a->nc.stop();
     sleepMs(300);
     c->nc.login("alice", "pw-alice");
-    check(c->wait(EventType::LoginOk, 8000), "re-login after the first session logged out");
+    ok = c->wait(EventType::LoginOk, 8000, &e) && e.message == "welcome back";
+    check(ok, "re-login after the first session logged out: \"" + e.message + "\"");
 }
 
 void scenarioRoomUdp()

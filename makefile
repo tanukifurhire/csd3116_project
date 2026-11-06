@@ -55,7 +55,7 @@ drifto: $(CLIENT_OBJS) $(GAME_OBJS) $(GFX_OBJS) $(NET_CLIENT_OBJS) $(AUDIO_OBJS)
 
 N ?= 1
 
-.PHONY: all clean run certs legacy
+.PHONY: all clean clean-certs run certs legacy
 
 all: legacy drifto api_server game_server
 
@@ -64,20 +64,30 @@ legacy: server client certs
 $(IDL_GEN): $(IDL_SRC)
 	$(IDLC) -l c $(IDL_SRC)
 
-# certs/ is gitignored (private keys shouldn't be committed) and gets wiped
-# by 'make clean', so regenerate it from scratch whenever it's missing.
+# certs/ is gitignored (private keys shouldn't be committed). The submission
+# ships the team's certs/ so clients can log in to our online servers, which
+# only accept certificates signed by that CA. So certs are generated only when
+# MISSING (order-only '|' prerequisites), never because a file looks newer:
+# unzipping resets timestamps, and a regenerated CA would silently lock the
+# player out of the online servers. To start over: make clean-certs certs.
+# To re-sign after editing governance.xml/permissions.xml: delete that .p7s.
 # certs/ca.pem stands in for the whole cert/key batch gen_certs.sh produces.
-certs/ca.pem: gen_certs.sh
+certs/ca.pem: | gen_certs.sh
 	chmod +x gen_certs.sh
 	./gen_certs.sh
 
-certs/governance.p7s: governance.xml certs/ca.pem
+certs/governance.p7s: | governance.xml certs/ca.pem
 	openssl smime -sign -in governance.xml -text -out certs/governance.p7s -signer certs/ca.pem -inkey certs/ca.key
 
-certs/permissions.p7s: permissions.xml certs/ca.pem
+certs/permissions.p7s: | permissions.xml certs/ca.pem
 	openssl smime -sign -in permissions.xml -text -out certs/permissions.p7s -signer certs/ca.pem -inkey certs/ca.key
 
 certs: certs/governance.p7s certs/permissions.p7s
+
+# Deletes all certificates/keys (not part of 'make clean'). Everyone who plays
+# together, servers included, then needs the newly generated set.
+clean-certs:
+	rm -f certs/*.key certs/*.pem certs/*.p7s certs/*.csr certs/*.srl
 
 server: server.c auth.c auth.h messages.c
 	$(CC) -o server server.c auth.c messages.c $(DDS_CFLAGS) $(DDS_LIBS) $(OPENSSL_LIBS)
@@ -98,7 +108,6 @@ auth.o: auth.c auth.h
 clean:
 	rm -f server client client_cpp server_cpp drifto api_server game_server gfx_demo audio_demo game_tests net_tests lan_probe messages.c messages.h messages.o auth.o
 	rm -rf $(BUILD)
-	rm -f certs/*.key certs/*.pem certs/*.p7s certs/*.csr certs/*.srl
 
 # Starts the server, waits a few seconds for it to come up, then launches
 # N clients (1-4). Usage: make run N=3

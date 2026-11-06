@@ -819,6 +819,12 @@ bool Client::ensureNetStarted()
 void Client::submitLogin()
 {
     if (nameField_.text.empty()) { status_ = "Enter a name (max 8 characters)"; loginFocus_ = 0; return; }
+    if (!lanMode_ && passField_.text.empty())
+    {
+        status_ = "Type a password: a new name makes an account with it";
+        loginFocus_ = 1;
+        return;
+    }
     if (!lanMode_)
     {
         std::string api = apiField_.text;
@@ -891,6 +897,9 @@ void Client::pollNet()
         case net::EventType::LoginOk:
             loginPending_ = false;
             status_.clear();
+            // first login with this name on this server: confirm the account exists now
+            if (!lanMode_ && ev.message == "account created")
+                status_ = "Account '" + nameField_.text + "' created - use the same password next time";
             saveSettings(lanMode_ ? "lan" : "online");
             screen_ = Screen::RoomList;
             net_->requestRoomList();
@@ -899,7 +908,21 @@ void Client::pollNet()
             break;
         case net::EventType::LoginFailed:
             loginPending_ = false;
-            status_ = "Login failed: " + ev.message;
+            // A wrong password means someone (maybe you) already registered this name.
+            // Matches the old server text ("bad password") and the new one.
+            if (ev.message.find("password") != std::string::npos && ev.message != "empty password")
+            {
+                status_ = "'" + nameField_.text + "' is taken: wrong password. Retry, or pick a new name";
+                loginFocus_ = 1;
+                passField_.text.clear();
+            }
+            else if (ev.message == "empty password")
+            {
+                status_ = "Type a password: a new name makes an account with it";
+                loginFocus_ = 1;
+            }
+            else
+                status_ = "Login failed: " + ev.message;
             break;
         case net::EventType::RoomList:
             rooms_ = ev.rooms;
@@ -1836,12 +1859,17 @@ void Client::drawMenus()
         }
         else
         {
-            title("online  -  log in");
-            drawPanel(cx - 230 * s, H * 0.33f, 460 * s, 310 * s);
+            // Accounts are per player, not a server password: the first login with a
+            // new name creates it with whatever password is typed, later logins must
+            // match. Say so right under the field (players read it as a server password).
+            title("online  -  log in or create an account");
+            drawPanel(cx - 230 * s, H * 0.33f, 460 * s, 370 * s);
             field(H * 0.33f + 50 * s, "NAME (max 8)", nameField_, loginFocus_ % 3 == 0);
-            field(H * 0.33f + 140 * s, "PASSWORD", passField_, loginFocus_ % 3 == 1);
-            field(H * 0.33f + 230 * s, "SERVER (API address)", apiField_, loginFocus_ % 3 == 2);
-            statusLine(H * 0.33f + 330 * s);
+            field(H * 0.33f + 140 * s, "YOUR PASSWORD", passField_, loginFocus_ % 3 == 1);
+            textCentred(cx, H * 0.33f + 192 * s, 1.6f * s, "New name? This password creates your account.", kGrey);
+            textCentred(cx, H * 0.33f + 214 * s, 1.6f * s, "Played before? Use the password you chose.", kGrey);
+            field(H * 0.33f + 290 * s, "SERVER (API address)", apiField_, loginFocus_ % 3 == 2);
+            statusLine(H * 0.33f + 390 * s);
             hint("TAB switch field   ENTER log in   ESC back");
         }
         break;

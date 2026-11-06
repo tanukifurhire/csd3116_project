@@ -390,12 +390,15 @@ void ApiServer::doLogin(Session &s, const drifto_ApiReq &q)
         sendSimple(s, q.seq, RepLoginFailed, "empty password");
         return;
     }
-    // PBKDF2 check (or first-time registration) in auth.c
-    AuthResult ar = auth_authenticate(name.c_str(), pw.c_str());
+    // PBKDF2 check (or first-time registration) in auth.c. Players pick their own
+    // password: the first login with a new name creates the account, later logins
+    // must match it. The reply text tells the client which case happened.
+    bool registered = false;
+    AuthResult ar = auth_authenticate_ex(name.c_str(), pw.c_str(), &registered);
     if (ar == AUTH_BAD_PASSWORD)
     {
         srv::log("login '%s': bad password", name.c_str());
-        sendSimple(s, q.seq, RepLoginFailed, "bad password");
+        sendSimple(s, q.seq, RepLoginFailed, "wrong password - this name is already registered");
         return;
     }
     if (ar != AUTH_OK)
@@ -415,11 +418,12 @@ void ApiServer::doLogin(Session &s, const drifto_ApiReq &q)
     s.loggedIn = true;
     s.name = name;
     s.pid = nextPid_++;
-    srv::log("player %d '%s' logged in", s.pid, name.c_str());
+    srv::log("player %d '%s' logged in%s", s.pid, name.c_str(), registered ? " (new account)" : "");
     drifto_ApiRep r{};
     r.reqSeq = q.seq;
     r.kind = RepLoginOk;
     r.playerId = s.pid;
+    copyStr(r.message, sizeof r.message, registered ? "account created" : "welcome back");
     send(s, r);
 }
 
