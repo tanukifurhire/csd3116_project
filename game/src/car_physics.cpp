@@ -222,7 +222,14 @@ void stepCar(CarSimState &s, const net::CarInput &rawInput, const Track &track, 
     const bool rearGrounded = (s.wheelContactMask & 0xCu) != 0;
 
     // ---- nitro (new): burns while held, only with the rear wheels down ----
-    const bool burning = in.nitro && s.nitro > 0.0f && rearGrounded && s.alive && throttle > 0.0f;
+    // A burn can only START with at least nitroMinStart in the gauge; an
+    // ongoing burn (nitroActive from last tick) may run the gauge down to
+    // empty. Once it stops -- empty, key released, wheels up -- it needs the
+    // threshold again, so holding the key can't sip every drop the drift
+    // recharge adds. Stateless on purpose: nitroActive is already replicated
+    // (net::kCarNitro), so prediction / replay rebuild the same latch.
+    const bool canBurn = s.nitroActive ? s.nitro > 0.0f : s.nitro >= p.nitroMinStart;
+    const bool burning = in.nitro && canBurn && rearGrounded && s.alive && throttle > 0.0f;
     s.nitroActive = burning;
     if (burning) s.nitro = std::fmax(0.0f, s.nitro - p.nitroBurnRate * dt);
 

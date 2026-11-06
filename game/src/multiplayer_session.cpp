@@ -131,6 +131,21 @@ int MultiplayerSession::lookFor(int32_t id) const
     return it == playerIds_.end() ? 0 : static_cast<int>(it - playerIds_.begin()) % 4;
 }
 
+// Car model of a player: our own choice for us, the host's record (newest
+// input; bots by look) on the host, the snapshot flag on a client. Until a
+// player's first input reaches the host, the look's parity stands in.
+int MultiplayerSession::carModelOf(int32_t id) const
+{
+    if (id == localId_) return localCarModel_;
+    if (isHost_)
+    {
+        auto it = cars_.find(id);
+        return it != cars_.end() ? it->second.model : lookFor(id) % 2;
+    }
+    auto it = lastCars_.find(id);
+    return it != lastCars_.end() && (it->second.flags & net::kCarModelRx7) ? 1 : 0;
+}
+
 // Grid order shuffled by the seed (everyone computes the same), so pole
 // position isn't always the lowest player id.
 std::vector<int32_t> MultiplayerSession::gridOrder() const
@@ -226,6 +241,7 @@ void MultiplayerSession::beginMatch(uint32_t trackSeed, const std::vector<int32_
             hc.state = hc.prev = spawn;
             hc.last = holdInput(0);
             hc.bot = isBot(id);
+            hc.model = static_cast<uint8_t>(id == localId_ ? localCarModel_ : lookFor(id) % 2);
             // A little variety between bots.
             uint64_t h = splitmix64(static_cast<uint64_t>(trackSeed) * 31u + static_cast<uint32_t>(id));
             hc.brain.cornerFactor = 0.73f + 0.06f * static_cast<float>(h & 0xff) / 255.0f;
@@ -245,6 +261,9 @@ void MultiplayerSession::beginMatch(uint32_t trackSeed, const std::vector<int32_
             remotes_[id] = r;
         }
         lastCars_[id] = toNetState(spawn, id, 0);
+        // Until the host's first snapshot: the look's parity (the host's default too).
+        if (lookFor(id) % 2) lastCars_[id].flags |= net::kCarModelRx7;
+        if (remotes_.count(id)) remotes_[id].latest.flags = lastCars_[id].flags;
     }
 }
 
@@ -348,6 +367,7 @@ void MultiplayerSession::becomeHostFromSnapshot()
         }
         hc.prev = hc.state;
         hc.left = (cs.flags & net::kCarEliminated) != 0 && cs.eliminatedOrder == 0;
+        hc.model = kv.first == localId_ ? localCarModel_ : ((cs.flags & net::kCarModelRx7) ? 1 : 0);
         cars_[kv.first] = hc;
     }
     if (haveSnapshot_) race_.restore(lastSnapshot_);
@@ -374,6 +394,7 @@ void MultiplayerSession::becomeClient()
         {
             Remote r;
             r.latest = toNetState(kv.second.state, kv.first, 0);
+            if (kv.second.model) r.latest.flags |= net::kCarModelRx7; // keep its car until the next snapshot
             r.samples.push_back({0, r.latest});
             remotes_[kv.first] = r;
         }
@@ -445,6 +466,7 @@ void MultiplayerSession::hostTick(const net::CarInput &localInput)
         if (it == cars_.end() || it->second.bot) continue;
         HostCar &hc = it->second;
         if (pi.input.tick <= hc.lastQueued) continue; // duplicate / too late
+        hc.model = pi.input.carModel ? 1 : 0; // the cosmetic choice rides on every input
         hc.queue.push_back(pi.input);
         hc.lastQueued = pi.input.tick;
     }
@@ -567,6 +589,7 @@ void MultiplayerSession::publish()
         cs.eliminatedOrder = race_.eliminatedOrder(kv.first);
         cs.place = race_.started() ? race_.place(kv.first) : 0;
         if (cs.eliminatedOrder != 0 || kv.second.left) cs.flags |= net::kCarEliminated;
+        if (kv.first == localId_ ? localCarModel_ : kv.second.model) cs.flags |= net::kCarModelRx7;
         snap.cars.push_back(cs);
         lastCars_[kv.first] = cs;
     }
@@ -632,6 +655,7 @@ void MultiplayerSession::clientTick(const net::CarInput &rawInput)
     // 2) Predict this tick with exactly the input we send.
     net::CarInput in = phase_ == net::MatchPhase::Racing && !localEliminated() ? rawInput : holdInput(localTick_);
     in.tick = localTick_;
+    in.carModel = localCarModel_; // also during the countdown: the host learns our car before the start
     net_.sendInput(in);
     localPrev_ = local_;
     if (!localEliminated() && phase_ != net::MatchPhase::Results)
@@ -942,6 +966,7 @@ std::vector<CarView> MultiplayerSession::carViews(float alpha) const
             v.local = kv.first == localId_;
             v.bot = kv.second.bot;
             v.look = lookFor(kv.first);
+            v.model = carModelOf(kv.first);
             fillView(v, kv.second.prev, kv.second.state, alpha);
             v.eliminatedOrder = race_.eliminatedOrder(kv.first);
             v.eliminated = v.eliminatedOrder != 0 || kv.second.left;
@@ -957,6 +982,7 @@ std::vector<CarView> MultiplayerSession::carViews(float alpha) const
     me.playerId = localId_;
     me.local = true;
     me.look = lookFor(localId_);
+    me.model = localCarModel_;
     fillView(me, localPrev_, local_, alpha);
     me.position += visualOffset_;
     me.rotation = dm::normalize(visualRotOffset_ * me.rotation);
@@ -1010,6 +1036,7 @@ std::vector<CarView> MultiplayerSession::carViews(float alpha) const
         }
         v.playerId = kv.first;
         v.look = lookFor(kv.first);
+        v.model = (r.latest.flags & net::kCarModelRx7) ? 1 : 0;
         v.bot = isBot(kv.first);
         out.push_back(v);
     }

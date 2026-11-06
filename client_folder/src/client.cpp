@@ -156,6 +156,7 @@ const char *usageText()
            "  --headless     no window / GL: bot client or soak run (implies --demo); --fast runs\n"
            "                 offline races as fast as the CPU allows; --races N / --duration S end it\n"
            "  --mute / --volume V   sound off / master volume 0..1 (remembered)\n"
+           "  --car ae86|rx7 the car you drive (remembered; A/D or LEFT/RIGHT in the menus)\n"
            "controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting), Esc back\n";
 }
 
@@ -183,6 +184,15 @@ bool parseArgs(int argc, char **argv, Options &o, std::string &error)
             const char *v = next("0..1");
             if (!v) return false;
             o.volume = dm::clampf(static_cast<float>(std::atof(v)), 0.0f, 1.0f);
+        }
+        else if (a == "--car")
+        {
+            const char *v = next("ae86|rx7");
+            if (!v) return false;
+            std::string c = v;
+            if (c == "ae86" || c == "AE86") o.carModel = 0;
+            else if (c == "rx7" || c == "RX7" || c == "rx-7" || c == "RX-7") o.carModel = 1;
+            else { error = "--car must be ae86 or rx7"; return false; }
         }
         else if (a == "--fps") { const char *v = next("a frame cap"); if (!v) return false; o.fpsCap = std::atoi(v); }
         else if (a == "--races") { const char *v = next("a count"); if (!v) return false; o.races = std::atoi(v); }
@@ -272,6 +282,7 @@ Client::Client(const Options &options) : opt_(options)
     apiField_.maxLen = 64;
     loadSettings();
     if (opt_.volume >= 0) volume_ = opt_.volume;
+    if (opt_.carModel >= 0) carModel_ = opt_.carModel;
     if (opt_.lan) lanMode_ = true;
     apiField_.text = opt_.apiHost;
     // Relative asset dirs resolve against the cwd, else next to the executable
@@ -280,7 +291,7 @@ Client::Client(const Options &options) : opt_(options)
 }
 
 // ---------------------------------------------------------------------------
-// remembered settings: <platform::configDir()>/settings.txt (mode, name, api, volume).
+// remembered settings: <platform::configDir()>/settings.txt (mode, name, api, volume, car).
 // Best effort: every failure is silent.
 // ---------------------------------------------------------------------------
 
@@ -309,6 +320,7 @@ void Client::loadSettings()
         if (k == "name" && nameField_.text.empty()) nameField_.text = v.substr(0, net::kMaxNameLen);
         else if (k == "api" && !opt_.apiGiven && !v.empty()) opt_.apiHost = v;
         else if (k == "volume" && opt_.volume < 0) volume_ = dm::clampf(static_cast<float>(std::atof(v.c_str())), 0.0f, 1.0f);
+        else if (k == "car") carModel_ = v == "rx7" ? 1 : 0;
         else if (k == "mode")
             menuIndex_ = v == "online" ? 1 : (v == "lan" ? 2 : 0); // preselect only; --lan / the menu decide
     }
@@ -325,7 +337,19 @@ void Client::saveSettings(const char *mode) const
     std::ofstream out(p, std::ios::trunc);
     if (!out) return;
     out << "mode=" << mode << "\n" << "name=" << nameField_.text << "\n" << "api=" << opt_.apiHost << "\n"
-        << "volume=" << volume_ << "\n";
+        << "volume=" << volume_ << "\n" << "car=" << (carModel_ ? "rx7" : "ae86") << "\n";
+}
+
+// Pick our car (0 = AE86, 1 = RX-7; cosmetic). The sessions stamp it on our
+// inputs from now on, so the host -- and through its snapshots every other
+// player -- sees it. Remembered with the rest of the settings.
+void Client::setCarModel(int model)
+{
+    carModel_ = model ? 1 : 0;
+    if (session_) session_->setLocalCarModel(carModel_);
+    if (offline_) offline_->setLocalCarModel(carModel_);
+    const char *modes[4] = {"offline", "online", "lan", "offline"};
+    saveSettings(screen_ == Screen::MainMenu ? modes[menuIndex_ & 3] : (lanMode_ ? "lan" : "online"));
 }
 
 Client::~Client() { Shutdown(); }
@@ -342,6 +366,7 @@ bool Client::Init()
         net_ = std::make_unique<net::NetClient>();
         transport_ = std::make_unique<NetClientTransport>(*net_);
         session_ = std::make_unique<game::MultiplayerSession>(*transport_);
+        session_->setLocalCarModel(carModel_);
         if (opt_.autoLogin.empty()) startOfflineRun();
         else
         {
@@ -598,6 +623,7 @@ void Client::startOfflineRun()
     cfg.resultsSeconds = 1e6f; // results stay up until the player chooses
     offlineNet_ = std::make_unique<game::LoopbackTransport>(1);
     offline_ = std::make_unique<game::MultiplayerSession>(*offlineNet_, cfg);
+    offline_->setLocalCarModel(carModel_);
     std::vector<int32_t> bots;
     for (int i = 0; i < std::clamp(opt_.bots, 1, 3); ++i) bots.push_back(2 + i);
     offline_->hostStartMatch(seed, {1}, bots);
@@ -633,7 +659,9 @@ void Client::stepAttract()
     run.track->ensureGenerated(run.car.section + 30);
     ++run.tick;
     game::stepCar(run.car, run.bot.drive(run.car, *run.track, game::defaultCarParams(), run.tick), *run.track);
-    if (world_) world_->onSimTick(*run.track, {viewOf(run.prev, run.car, 1.0f, 0)});
+    game::CarView v = viewOf(run.prev, run.car, 1.0f, 0);
+    v.model = carModel_; // the menu background shows the car we picked
+    if (world_) world_->onSimTick(*run.track, {v});
     if (!run.car.alive && run.car.deadTimer > 3.0f) startAttract();
 }
 
@@ -1053,6 +1081,8 @@ void Client::menuKey(int key)
     if (key == GLFW_KEY_UP || key == GLFW_KEY_W) menuIndex_ = (menuIndex_ + items - 1) % items;
     else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_S) menuIndex_ = (menuIndex_ + 1) % items;
     else if (key == GLFW_KEY_ESCAPE) quit_ = true;
+    else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_A || key == GLFW_KEY_RIGHT || key == GLFW_KEY_D)
+        setCarModel(1 - carModel_); // two cars: either direction toggles
     else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER || key == GLFW_KEY_SPACE)
     {
         if (menuIndex_ == 0) { startOfflineRun(); return; }
@@ -1101,6 +1131,8 @@ void Client::roomListKey(int key)
     if (key == GLFW_KEY_ESCAPE) screen_ = Screen::MainMenu;
     else if ((key == GLFW_KEY_UP || key == GLFW_KEY_W) && n) roomIndex_ = (roomIndex_ + n - 1) % n;
     else if ((key == GLFW_KEY_DOWN || key == GLFW_KEY_S) && n) roomIndex_ = (roomIndex_ + 1) % n;
+    else if (key == GLFW_KEY_LEFT || key == GLFW_KEY_A || key == GLFW_KEY_RIGHT || key == GLFW_KEY_D)
+        setCarModel(1 - carModel_);
     else if (key == GLFW_KEY_R || key == GLFW_KEY_F5)
     {
         net_->requestRoomList();
@@ -1134,7 +1166,9 @@ void Client::roomListKey(int key)
 void Client::lobbyKey(int key)
 {
     if (key == GLFW_KEY_ESCAPE) { net_->leaveRoom(); screen_ = Screen::RoomList; return; }
-    if (key == GLFW_KEY_SPACE || key == GLFW_KEY_R)
+    if (key == GLFW_KEY_LEFT || key == GLFW_KEY_A || key == GLFW_KEY_RIGHT || key == GLFW_KEY_D)
+        setCarModel(1 - carModel_); // until the race starts (the host reads it from our inputs)
+    else if (key == GLFW_KEY_SPACE || key == GLFW_KEY_R)
     {
         ready_ = !ready_;
         net_->setReady(ready_);
@@ -1327,6 +1361,7 @@ void Client::frame(float dt, float alpha)
     else
     {
         std::vector<game::CarView> cars{viewOf(attract_.prev, attract_.car, alpha, 0)};
+        cars[0].model = carModel_;
         drawWorld(*attract_.track, cars, &cars[0], dt, false);
         updateAudio(nullptr, cars, nullptr, dt); // menus are silent
         drawMenus();
@@ -1433,7 +1468,7 @@ void Client::updateAudio(game::MultiplayerSession *s, const std::vector<game::Ca
         if (!snd_) continue;
 
         audio::CarAudioState st;
-        st.model = c.look % 2 == 0 ? audio::CarModel::AE86 : audio::CarModel::RX7; // matches the drawn car
+        st.model = c.model == 0 ? audio::CarModel::AE86 : audio::CarModel::RX7; // matches the drawn car
         st.isLocal = target && c.playerId == target->playerId; // spectated car is close-miked too
         st.position = c.position;
         st.velocity = c.velocity;
@@ -1608,8 +1643,8 @@ void Client::drawRaceHud(game::MultiplayerSession &s, const std::vector<game::Ca
         ng.slipstream = gaugeCar->slipstream;
         ng.night = night;
         ng.time = tach.time;
-        // AE86 looks get the AE86 dial (yellow/red zone), the RX-7 the 8k one.
-        gauges_->setRpmScale(gaugeCar->look % 2 == 0 ? "86" : "");
+        // The AE86 gets the AE86 dial (yellow/red zone), the RX-7 the 8k one.
+        gauges_->setRpmScale(gaugeCar->model == 0 ? "86" : "");
         gauges_->drawCluster(*renderer_, tach, ng);
         // Drift feedback (it's what charges the nitro), centred above the hint line.
         if (gaugeCar->drifting)
@@ -1762,14 +1797,22 @@ void Client::drawMenus()
         if (!status_.empty()) textCentred(cx, y, 2.0f * s, status_, kAccent);
     };
     auto hint = [&](const std::string &h) { textCentred(cx, H - 40 * s, 1.8f * s, h, kGrey); };
+    // Car selector "<  AE86  >": A/D or LEFT/RIGHT on the menu, room list and lobby screens.
+    auto carSelector = [&](float y) {
+        float w = 300 * s, x = cx - w * 0.5f;
+        renderer_->drawRect(x, y, w, 40 * s, dm::Vec3{0.08f, 0.09f, 0.12f}, 0.85f);
+        text(x + 14 * s, y + 8 * s, 3.0f * s, "<", kAccent);
+        text(x + w - 30 * s, y + 8 * s, 3.0f * s, ">", kAccent);
+        textCentred(cx, y + 8 * s, 3.0f * s, carModel_ ? "RX-7" : "AE86", kWhite);
+        textCentred(cx, y + 48 * s, 1.6f * s, "CAR   A/D or LEFT/RIGHT", kDim);
+    };
 
     switch (screen_)
     {
     case Screen::MainMenu:
     {
         title("elimination touge - last place has a clock");
-        const char *items[4] = {"OFFLINE  -  race the bots", "ONLINE  -  race on a server", "LAN  -  race on this network",
-                                "QUIT"};
+        const char *items[4] = {"OFFLINE PLAY", "ONLINE PLAY", "LAN PLAY", "QUIT"};
         drawPanel(cx - 230 * s, H * 0.42f - 20 * s, 460 * s, 220 * s);
         for (int i = 0; i < 4; ++i)
         {
@@ -1778,7 +1821,8 @@ void Client::drawMenus()
             if (sel) renderer_->drawRect(cx - 210 * s, y - 8 * s, 420 * s, 38 * s, kAccent, 0.85f);
             textCentred(cx, y, 2.8f * s, items[i], sel ? kWhite : kGrey);
         }
-        hint("UP/DOWN select   ENTER confirm   ESC quit");
+        carSelector(H * 0.42f + 220 * s);
+        hint("UP/DOWN select   A/D car   ENTER confirm   ESC quit");
         break;
     }
     case Screen::Login:
@@ -1825,8 +1869,9 @@ void Client::drawMenus()
             text(px + 380 * s, y, 2.4f * s, fmt("%d/%d%s", r.players, r.maxPlayers, r.inProgress ? "  racing" : ""), c);
         }
         statusLine(py + (80 + 40 * std::max(shown, 1)) * s);
-        hint(lanMode_ ? "UP/DOWN select   ENTER join   H host game   ESC back"
-                      : "UP/DOWN select   ENTER join   H host   C create named   R refresh   ESC back");
+        carSelector(py + (110 + 40 * std::max(shown, 1)) * s);
+        hint(lanMode_ ? "UP/DOWN select   A/D car   ENTER join   H host game   ESC back"
+                      : "UP/DOWN select   A/D car   ENTER join   H host   C create named   R refresh   ESC back");
         break;
     }
     case Screen::CreateRoom:
@@ -1858,8 +1903,9 @@ void Client::drawMenus()
             text(px + 340 * s, y, 2.4f * s, r.ready ? "READY" : "...", r.ready ? kGreen : kDim);
         }
         statusLine(py + (90 + 38 * std::max<size_t>(roster_.size(), 1)) * s);
-        hint(net_->isHost() ? "SPACE ready   ENTER start race   ESC leave"
-                            : "SPACE ready   (the host starts the race)   ESC leave");
+        carSelector(py + (120 + 38 * std::max<size_t>(roster_.size(), 1)) * s);
+        hint(net_->isHost() ? "A/D car   SPACE ready   ENTER start race   ESC leave"
+                            : "A/D car   SPACE ready   (the host starts the race)   ESC leave");
         break;
     }
     case Screen::Message:

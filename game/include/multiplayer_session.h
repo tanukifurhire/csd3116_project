@@ -100,7 +100,8 @@ struct CarView
     int32_t playerId = 0;
     bool local = false;
     bool bot = false;
-    int look = 0;             // 0..3: which car/paint (rank of the id in the room)
+    int look = 0;             // 0..3: which paint (rank of the id in the room)
+    int model = 0;            // which car: 0 = AE86, 1 = RX-7 (the player's choice; bots by look)
     dm::Vec3 position;
     dm::Quat rotation;
     dm::Vec3 velocity;
@@ -181,6 +182,13 @@ public:
     // Host / offline: personality of a bot car (after hostStartMatch).
     void setBotProfile(int32_t playerId, const BotProfile &profile);
     const BotProfile *botProfile(int32_t playerId) const;
+    // Our cosmetic car choice (0 = AE86, 1 = RX-7). Stamped on every input we
+    // send (CarInput::carModel); the host republishes each player's choice in
+    // the snapshot flags (net::kCarModelRx7). Can be set at any time.
+    void setLocalCarModel(int model) { localCarModel_ = model ? 1 : 0; }
+    int localCarModel() const { return localCarModel_; }
+    // The car model drawn for a player (host: newest input; client: snapshot).
+    int carModelOf(int32_t playerId) const;
 
     // --- per fixed tick ----------------------------------------------------
     void tick(const net::CarInput &localInput);
@@ -248,6 +256,7 @@ private:
         uint32_t lastQueued = 0;
         bool bot = false;
         bool left = false;
+        uint8_t model = 0;  // cosmetic car choice (from the player's inputs; bots: by look)
         BotDriver brain;
     };
     struct HistoryEntry
@@ -332,6 +341,7 @@ private:
     net::WorldSnapshot lastSnapshot_;
     bool haveSnapshot_ = false;
     float localMultiplier_ = 1.0f;
+    uint8_t localCarModel_ = 0;
 
     Stats stats_;
 };

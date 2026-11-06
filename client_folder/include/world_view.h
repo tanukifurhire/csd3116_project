@@ -18,8 +18,9 @@
 
 namespace client {
 
-// The four car looks (CarView::look): AE86 white, RX-7 yellow, AE86 red,
-// RX-7 blue. lookColor() is the body paint (also the HUD swatch colour).
+// The four paints (CarView::look): white, gold, red, blue -- one per room
+// slot, so cars stay distinguishable whichever model (CarView::model, the
+// player's AE86 / RX-7 pick) they are. HUD swatches use lookColor().
 dm::Vec3 lookColor(int look);
 const char *lookName(int look);
 
@@ -96,7 +97,7 @@ private:
 
     void destroySection(SectionGfx &s);
     void loadCarModel(const std::string &name, CarModel &out);
-    const CarModel &carModelFor(int look) const;
+    const CarModel &carModelFor(int model) const;
     void drawCar(const game::CarView &car, CarAnim &anim, float dt, float time);
     float rand01();
 

@@ -38,6 +38,11 @@
 // states), with wrecks, barrier hits and car contacts (unaligned collision
 // avoidance; the hunter's prey is a reward instead) as costs.
 //
+// Nitro: at each re-plan the winning plan is simulated once more with the
+// key held. If that stays controllable (no wreck, no barrier hit) and costs
+// at most a preset-scaled slack more, the bot burns: whenever it pays, always
+// on a full gauge, and to bring a ram up to takedown closing speed.
+//
 // Bots drive through the same net::CarInput (steer, nitro; auto throttle)
 // and the same stepCar as humans. drive() is deterministic for a given
 // (driver state, inputs); it only runs on the host, so its own state does
@@ -59,6 +64,7 @@ struct BotProfile
     const char *name = "Racer";
     float pace = 1.0f;           // corner-speed targets x this (1 = on the limit)
     float topSpeedFactor = 0.9f; // fraction of the nitro top speed it allows itself (nitro use)
+    float nitroEagerness = 0.6f; // 0..1: how much plan cost a burn may add (see drive(): nitro)
     float aggression = 0.35f;    // 0..1: pursuit / ramming / blocking vs. giving way
     int reactionTicks = 1;       // steering lag (60 Hz ticks, max 15)
     float steerNoise = 0.0f;     // 0..1: smooth deterministic steering error
@@ -109,6 +115,7 @@ struct BotDriver
     int planTicks = 0;          // ticks until the next re-plan
     float planSteer = 0;
     bool planReactive = true;   // the closed-loop direct mapping won the last plan
+    bool planNitro = false;     // the last plan stays controllable with nitro held
     float stuckTime = 0, recoverTime = 0, recoverSteer = 0;
 
     net::CarInput drive(const CarSimState &car, const Track &track, const CarParams &params, uint32_t tick,
