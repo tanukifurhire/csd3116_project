@@ -34,7 +34,8 @@ DMESH FORMAT (little endian, version 1)
         f32  emission[3]   added unlit (head lights etc.)
         u32  flags         bit0 = double sided, bit1 = no outline,
                            bit2 = glossy (toon specular highlight),
-                           bit3 = alpha test (discard texels with a < 0.5)
+                           bit3 = alpha test (discard texels with a < 0.5),
+                           bit4 = body paint (cars: replaced by the player's colour)
         char texture[64]   file under textures/ ("" = none), NUL padded
     vertex[vertexCount]:   f32 pos[3], normal[3], color[3], uv[2]  (44 bytes)
     u32      indices[indexCount]   (triangles, CCW front faces)
@@ -63,13 +64,14 @@ except Exception:  # pragma: no cover
 
 TARBALL_URL = "https://codeload.github.com/JohnnyHowe/drifto-old/tar.gz/HEAD"
 FORMAT_VERSION = 1  # bump to force regeneration when the converter changes
-CONVERTER_STAMP = "dmesh-v%d-conv10" % FORMAT_VERSION
+CONVERTER_STAMP = "dmesh-v%d-conv11" % FORMAT_VERSION
 SKY_STAMP = "skybox-v1"  # separate so mesh-only changes skip the slow PNG work
 
 FLAG_DOUBLE_SIDED = 1
 FLAG_NO_OUTLINE = 2
 FLAG_GLOSSY = 4
 FLAG_ALPHA_TEST = 8
+FLAG_PAINT = 16  # car body paint: the renderer swaps in the player's colour
 
 
 def log(*a):
@@ -707,10 +709,11 @@ def path_of(nodes, fid):
     return "/".join(reversed(parts))
 
 
-def append_unity_part(model, proj, node, mat_override, tex_prefix, textures, extra=None):
+def append_unity_part(model, proj, node, mat_override, tex_prefix, textures, extra=None, paint=()):
     """Bake one MeshFilter/MeshRenderer into model, converting Unity (LH, +Z
     fwd) -> GL (RH, -Z fwd) by mirroring Z. extra: optional 4x4 applied after
-    the node's world matrix (still Unity space)."""
+    the node's world matrix (still Unity space). paint: material names that
+    get FLAG_PAINT (kept as their own submesh)."""
     mesh = proj.mesh(node.mesh[1])
     if mesh is None:
         return
@@ -719,6 +722,8 @@ def append_unity_part(model, proj, node, mat_override, tex_prefix, textures, ext
     for si, tris in enumerate(mesh["subs"]):
         guid = node.materials[min(si, len(node.materials) - 1)] if node.materials else None
         mat = mat_override or (proj.material(guid, tex_prefix, textures) if guid else Material("default"))
+        if mat.name in paint:
+            mat = Material(mat.name, mat.color, mat.emission, mat.texture, mat.flags | FLAG_PAINT)
         used = sorted(set(tris))
         remap = {o: n for n, o in enumerate(used)}
         pos, nrm, col, uv = [], [], [], []
@@ -790,6 +795,121 @@ CAR_EXHAUSTS = {
 }
 
 
+# Body-paint materials per car (Unity material m_Name), tagged FLAG_PAINT so
+# the renderer can recolour just the paintwork: not the tyres, rims, glass,
+# lights, trim, number plates or the door lettering. Found by rendering each
+# material in a flat colour. AE86: the white upper body (the black bonnet /
+# lower half of the panda livery stays). RX7: the white shell plus the
+# body-coloured bumpers, skirts, mirrors and wing (that material also covers
+# the rims, which go to the wheel model untagged).
+CAR_PAINT = {
+    "ae86": {"Material.001_0"},
+    "rx7": {"02_-_Default_4", "Material_9_3"},
+}
+
+# Cars whose wheels are baked into the body mesh (no per-wheel nodes): cut
+# them out geometrically (see split_baked_wheels). The RX7's front wheels are
+# also modelled turned, so the straight rear-left wheel is used for all four.
+CAR_SPLIT_BAKED_WHEELS = {"rx7"}
+
+
+def split_baked_wheels(model):
+    """Cut the wheels out of a car whose tyres, rims and brakes are part of
+    the body mesh. Works in final car space (metres, -Z forward, ground at
+    y = 0). Tyres are the connected parts that touch the ground; each one
+    defines a cylinder (axle from the principal axes of its footprint, so a
+    turned front wheel works too), and every connected part of any material
+    lying inside a cylinder moves to that wheel. Returns (body, {label:
+    (centre, axle, radius, half_width, Model)}) with labels fl/fr/rl/rr, or
+    None if four tyres are not found."""
+    # connected parts per material group (vertices welded by position)
+    parts = []  # (group key, [triangle index lists])
+    for gk, (mat, idx) in model.groups.items():
+        parent = {}
+
+        def find(x):
+            while parent.setdefault(x, x) != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        key = [tuple(round(c, 4) for c in model.pos[i]) for i in range(len(model.pos))]
+        for k in range(0, len(idx), 3):
+            a, b, c = (find(key[idx[k + j]]) for j in range(3))
+            parent[a] = b
+            parent[find(c)] = find(b)
+        comps = {}
+        for k in range(0, len(idx), 3):
+            comps.setdefault(find(key[idx[k]]), []).extend(idx[k:k + 3])
+        for tri in comps.values():
+            parts.append((gk, tri))
+
+    def bbox(tri):
+        pts = [model.pos[i] for i in tri]
+        return tuple(min(p[a] for p in pts) for a in range(3)), tuple(max(p[a] for p in pts) for a in range(3))
+
+    tyres = []
+    for gk, tri in parts:
+        b0, b1 = bbox(tri)
+        if b0[1] < 0.01 and b1[1] - b0[1] > 0.3:
+            tyres.append((b0, b1, tri))
+    if len(tyres) != 4:
+        return None
+    wheels = {}
+    for b0, b1, tri in tyres:
+        c = tuple((b0[a] + b1[a]) * 0.5 for a in range(3))
+        # axle = minor principal axis of the tyre's footprint in x/z
+        pts = [model.pos[i] for i in set(tri)]
+        mx = sum(p[0] for p in pts) / len(pts)
+        mz = sum(p[2] for p in pts) / len(pts)
+        sxx = sum((p[0] - mx) ** 2 for p in pts)
+        szz = sum((p[2] - mz) ** 2 for p in pts)
+        sxz = sum((p[0] - mx) * (p[2] - mz) for p in pts)
+        ang = 0.5 * math.atan2(2 * sxz, sxx - szz)  # major axis angle
+        axle = (-math.sin(ang), 0.0, math.cos(ang))  # perpendicular to it
+        if abs(axle[0]) < abs(axle[2]):  # keep the axle the one closer to X
+            axle = (math.cos(ang), 0.0, math.sin(ang))
+        radius = (b1[1] - b0[1]) * 0.5
+        hw = max(abs((p[0] - c[0]) * axle[0] + (p[2] - c[2]) * axle[2]) for p in pts)
+        label = ("f" if c[2] < 0 else "r") + ("l" if c[0] < 0 else "r")
+        wheels[label] = (c, axle, radius, hw, Model())
+    if sorted(wheels) != ["fl", "fr", "rl", "rr"]:
+        return None
+
+    def inside(tri, w):
+        c, axle, radius, hw, _ = w
+        for i in tri:
+            d = (model.pos[i][0] - c[0], model.pos[i][1] - c[1], model.pos[i][2] - c[2])
+            along = d[0] * axle[0] + d[1] * axle[1] + d[2] * axle[2]
+            radial2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] - along * along
+            if abs(along) > hw + 0.02 or radial2 > (radius + 0.02) ** 2:
+                return False
+        return True
+
+    body = Model()
+    body.pos, body.nrm, body.col, body.uv = model.pos, model.nrm, model.col, model.uv
+    for gk, tri in parts:
+        mat = model.groups[gk][0]
+        owner = next((w for w in wheels.values() if inside(tri, w)), None)
+        if owner is None:
+            body.groups.setdefault(gk, (mat, []))[1].extend(tri)
+        else:
+            # wheels are never paint (the RX7's rims share the body's white)
+            wm = Material(mat.name, mat.color, mat.emission, mat.texture, mat.flags & ~FLAG_PAINT)
+            dst = owner[4]
+            base = len(dst.pos)
+            used = sorted(set(tri))
+            remap = {o: base + n for n, o in enumerate(used)}
+            dst.pos += [model.pos[i] for i in used]
+            dst.nrm += [model.nrm[i] for i in used]
+            dst.col += [model.col[i] for i in used]
+            dst.uv += [model.uv[i] for i in used]
+            k = wm.key()
+            if k not in dst.groups:
+                dst.groups[k] = (wm, [])
+            dst.groups[k][1].extend(remap[i] for i in tri)
+    return body, wheels
+
+
 def is_ground_junk(name):
     """Sketchfab scenes ship with a floor plane under the car; skip it."""
     n = name.lower()
@@ -810,12 +930,13 @@ def convert_car(proj, name, prefab_rel, target_len, wheel_re, out_dir, textures,
         if is_ground_junk(path_of(nodes, fid) + " " + mesh["name"]):
             report.append("  %s: skipped %s" % (name, mesh["name"]))
             continue
-        append_unity_part(full, proj, n, None, name + "_", textures)
+        paint = CAR_PAINT.get(name, ())
+        append_unity_part(full, proj, n, None, name + "_", textures, paint=paint)
         if wheel_re and re.search(wheel_re, mesh["name"]):
             w = wheels.setdefault(n.father, Model())
-            append_unity_part(w, proj, n, None, name + "_", textures)
+            append_unity_part(w, proj, n, None, name + "_", textures)  # wheels: never paint
         else:
-            append_unity_part(body, proj, n, None, name + "_", textures)
+            append_unity_part(body, proj, n, None, name + "_", textures, paint=paint)
 
     # Unity -> GL already mirrored Z. Now rotate about Y so the nose is -Z,
     # then scale to target length, centre on X/Z, put the tyres on y = 0.
@@ -848,6 +969,22 @@ def convert_car(proj, name, prefab_rel, target_len, wheel_re, out_dir, textures,
     info = ["# %s: generated by convert_drifto_assets.py" % CONVERTER_STAMP,
             "# car local space: -Z forward, +X right, origin = ground centre, metres",
             "length=%.4f" % target_len]
+    if name in CAR_SPLIT_BAKED_WHEELS and not wheels:
+        split = split_baked_wheels(body)
+        if split is None:
+            report.append("  %s: could not find the four baked-in wheels" % name)
+        else:
+            body, baked = split
+            emit(body, name + "_body")
+            c, axle, radius, hw, w = baked["rl"]
+            w.transform(lambda p: (p[0] - c[0], p[1] - c[1], p[2] - c[2]))
+            emit(w, name + "_wheel")
+            info.append("# %s_wheel is the rear-left wheel centred on its axle (axle = X axis,"
+                        " hub cap facing -X); yaw it by pi for right-hand wheels" % name)
+            info.append("wheel_radius=%.4f" % radius)
+            info.append("wheel_width=%.4f" % (2 * hw))
+            for label in ("fl", "fr", "rl", "rr"):
+                info.append("wheel_%s=%.4f %.4f %.4f" % ((label,) + baked[label][0]))
     if wheels:
         emit(body, name + "_body")
         centres = {}

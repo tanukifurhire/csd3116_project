@@ -8,6 +8,7 @@ in vec2 vUV;
 in vec4 vLightPos;
 
 uniform vec4 uAlbedo;      // material colour * tint, alpha
+uniform bool uPaint;       // car body paint: uAlbedo is the whole colour (vertex colour ignored)
 uniform vec3 uEmission;
 uniform sampler2D uTex;
 uniform bool uHasTex;
@@ -58,7 +59,7 @@ float sunShadow(vec3 n, vec3 l)
 
 void main()
 {
-    vec4 albedo = vec4(vColor, 1.0) * uAlbedo;
+    vec4 albedo = uPaint ? uAlbedo : vec4(vColor, 1.0) * uAlbedo;
     if (uHasTex) albedo *= texture(uTex, vUV);
     if (uAlphaTest)
     {

@@ -3,6 +3,7 @@
 //   ./gfx_demo [--model NAME] [--skybox NAME] [--screenshot out.png]
 //              [--angle DEG] [--dist M] [--height M] [--size WxH] [--no-shadows]
 //              [--sky-only] [--fov DEG] [--look YAW,PITCH]
+//              [--car ae86|rx7 [--steer RAD] [--paint R,G,B]]
 //              --hud [--hud-theme NAME] [--hud-scale S] [--night 0|1]
 //              --fx [--time T] [--nitro 0|1] [--slip 0|1] [--no-blur] [--no-lines] [--no-flames] [--low]
 //
@@ -14,7 +15,9 @@
 // Shows a ground plane, the cars (ae86, rx7 and an ae86 assembled from
 // ae86_body + 4x ae86_wheel using the converter's wheel anchors), two rings of
 // trees, tyre-smoke billboards and the skybox, with an orbiting camera.
-// --model NAME puts just that model in the middle. --screenshot renders a few
+// --model NAME puts just that model in the middle; --car NAME assembles that
+// car from <car>_body + <car>_wheel with the front wheels steered by --steer
+// radians, body-painted --paint R,G,B (as the game does per player). --screenshot renders a few
 // frames into a hidden window, saves a PNG and exits. Keys: 1-9/0 cycle
 // skyboxes, M cycles the centre model, Esc quits.
 #define GLFW_INCLUDE_NONE
@@ -145,7 +148,10 @@ static void hudSim(float t, gfx::TachState &tach, gfx::NitroGaugeState &n)
 
 int main(int argc, char **argv)
 {
-    std::string model, skybox = "SkyAfterNoon", shot;
+    std::string model, skybox = "SkyAfterNoon", shot, carName;
+    bool paintOn = false;
+    Vec3 paint{1, 1, 1};
+    float carSteer = 0.35f;
     float angleDeg = -1, dist = 11.0f, camH = 3.0f, fov = 60.0f;
     bool look = false;
     float lookYaw = 0, lookPitch = 0;
@@ -162,6 +168,12 @@ int main(int argc, char **argv)
         std::string a = argv[i];
         auto next = [&]() -> const char * { return i + 1 < argc ? argv[++i] : ""; };
         if (a == "--model") model = next();
+        else if (a == "--car") carName = next();
+        else if (a == "--steer") carSteer = (float)std::atof(next());
+        else if (a == "--paint")
+        {
+            paintOn = std::sscanf(next(), "%f,%f,%f", &paint.x, &paint.y, &paint.z) == 3;
+        }
         else if (a == "--skybox") skybox = next();
         else if (a == "--screenshot") shot = next();
         else if (a == "--angle") angleDeg = (float)std::atof(next());
@@ -196,6 +208,7 @@ int main(int argc, char **argv)
                         "          [--dist M] [--height M] [--size WxH] [--no-shadows] [--sky-only]\n"
                         "          [--frames N (with --screenshot)]\n"
                         "          [--fov DEG] [--look YAW,PITCH]\n"
+                        "   car:  --car ae86|rx7 (body + steered wheels) [--steer RAD] [--paint R,G,B]\n"
                         "   hud: --hud [--hud-theme initiald|drifto_arcade] [--hud-scale S] [--night 0|1]\n"
                         "   effects: --fx [--time T] [--nitro 0|1] [--slip 0|1] [--no-blur] [--no-lines] [--no-flames] [--low]\n",
                         argv[0]);
@@ -251,6 +264,12 @@ int main(int argc, char **argv)
         gfx::ModelHandle ae86 = r.loadModel("ae86"), rx7 = r.loadModel("rx7");
         gfx::ModelHandle body = r.loadModel("ae86_body"), wheel = r.loadModel("ae86_wheel");
         gfx::ModelHandle centre = model.empty() ? 0 : r.loadModel(model);
+        gfx::ModelHandle carBody = 0, carWheel = 0;
+        if (!carName.empty())
+        {
+            carBody = r.loadModel(carName + "_body");
+            carWheel = r.loadModel(carName + "_wheel");
+        }
         std::vector<gfx::ModelHandle> trees;
         for (const std::string &m : models)
             if (m.rfind("tree_", 0) == 0 && m.find('_', 11) == std::string::npos) trees.push_back(r.loadModel(m));
@@ -403,6 +422,22 @@ int main(int argc, char **argv)
             if (!skyOnly) r.drawMesh(ground, Mat4(), ground_p);
             if (skyOnly)
                 ;
+            else if (carBody && carWheel)
+            {
+                // one car from its parts, front wheels steered, optional body paint
+                gfx::DrawParams cp;
+                cp.usePaint = paintOn;
+                cp.paint = paint;
+                r.drawModel(carBody, Mat4(), cp);
+                const char *keys[4] = {"wheel_fl", "wheel_fr", "wheel_rl", "wheel_rr"};
+                for (int w = 0; w < 4; ++w)
+                {
+                    Vec3 p;
+                    if (!r.modelPoint(carBody, keys[w], p)) continue;
+                    float yaw = (w < 2 ? carSteer : 0.0f) + ((w & 1) ? kPi : 0.0f);
+                    r.drawModel(carWheel, translate(p) * toMat4(quatYaw(yaw)), cp);
+                }
+            }
             else if (centre)
                 r.drawModel(centre, Mat4());
             else
