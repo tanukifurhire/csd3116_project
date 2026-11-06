@@ -1316,14 +1316,14 @@ void Client::frame(float dt, float alpha)
 // ===========================================================================
 
 // Per-car sound state, created on first use; the gearbox is tuned so that top
-// speed corresponds to the redline of the top gear.
+// speed cruises in 5th a little under the redline (never on the limiter).
 Client::CarSound &Client::carSound(int32_t id)
 {
     auto it = carSounds_.find(id);
     if (it != carSounds_.end()) return it->second;
     CarSound &cs = carSounds_[id];
     const game::CarParams &p = game::defaultCarParams();
-    cs.gearbox.configure(std::sqrt(p.driveForce / p.drag)); // 5th redlines at top speed
+    cs.gearbox.configure(std::sqrt(p.driveForce / p.drag)); // top speed cruises in 5th under the redline
     return cs;
 }
 
@@ -1356,22 +1356,50 @@ void Client::updateAudio(game::MultiplayerSession *s, const std::vector<game::Ca
     if (snd_) snd_->setListener(lp, fwd, up, listenerVel_);
 
     const net::MatchPhase phase = s->phase();
+    // Race over: the host stops stepping the cars on the podium, so their
+    // views keep the last racing state (top speed, nitro, slide). Rather
+    // than hold that as a loud sustained tone, every voice fades out.
+    const bool raceOver = phase == net::MatchPhase::Results || phase == net::MatchPhase::Lobby;
+    const float kRaceOverFade = 0.5f; // seconds
     const game::CarParams &p = game::defaultCarParams();
     for (auto &kv : carSounds_) kv.second.seen = false;
     for (const game::CarView &c : cars)
     {
         CarSound &cs = carSound(c.playerId);
         cs.seen = true;
+        if (phase == net::MatchPhase::Countdown)
+        {
+            // On the grid (also a new race on the same ids: race again, demo
+            // loop, next online match): start the sound afresh from idle.
+            cs.gearbox.reset();
+            cs.lastGear = 1;
+            cs.nitro = 0;
+            cs.wasNitro = false;
+            cs.level = 1.0f;
+            cs.removed = false;
+        }
         if (c.eliminated)
         {
             if (!cs.removed && snd_) snd_->removeCar(c.playerId); // fades out
             cs.removed = true;
             continue;
         }
-        cs.removed = false;
+        if (raceOver)
+        {
+            if (cs.removed) continue; // already faded out
+            cs.level = std::fmax(0.0f, cs.level - dt / kRaceOverFade);
+            if (cs.level <= 0.0f)
+            {
+                if (snd_) snd_->removeCar(c.playerId);
+                cs.removed = true;
+                continue;
+            }
+        }
+        else
+            cs.removed = false;
         float speed = dm::length(c.velocity);
-        bool burning = c.nitroActive && c.alive;
-        cs.gearbox.update(speed, burning, c.driftAngle, dt);
+        bool burning = c.nitroActive && c.alive && !raceOver;
+        if (!raceOver) cs.gearbox.update(speed, burning, c.driftAngle, dt); // frozen car: keep the last rpm
         bool shift = cs.gearbox.gear() != cs.lastGear;
         cs.lastGear = cs.gearbox.gear();
         cs.nitro += ((burning ? 1.0f : 0.0f) - cs.nitro) * (1.0f - std::exp(-8.0f * dt));
@@ -1386,16 +1414,22 @@ void Client::updateAudio(game::MultiplayerSession *s, const std::vector<game::Ca
         st.isLocal = target && c.playerId == target->playerId; // spectated car is close-miked too
         st.position = c.position;
         st.velocity = c.velocity;
-        st.rpm = cs.gearbox.rpm();
+        // While fading out after the race the revs also sink toward idle.
+        st.rpm = cs.gearbox.idleRpm + (cs.gearbox.rpm() - cs.gearbox.idleRpm) * cs.level;
         // Auto-throttle is on while racing; lift-off when airborne, wrecked /
         // respawning, on the grid (idle) and on the podium.
         bool onPower = phase == net::MatchPhase::Racing && c.alive && !c.airborne;
         st.throttle = onPower ? 1.0f : 0.0f;
+        if (raceOver) st.throttle = 0.2f; // a light load: no overrun pops while fading out
         st.shiftEvent = shift;
-        st.limiter = cs.gearbox.revLimiter();
+        // The cosmetic gearbox keeps the revs under the redline, so the
+        // synth's fuel-cut limiter bounce is never used in game.
+        st.limiter = false;
         float slip = (std::fabs(c.driftAngle) - p.driftAngleThreshold) / 35.0f;
         st.skid01 = c.alive && !c.airborne ? dm::clampf(slip, 0.0f, 1.0f) * dm::clampf(speed / 10.0f, 0.0f, 1.0f) : 0.0f;
+        st.skid01 *= cs.level;
         st.nitro01 = cs.nitro;
+        st.gain = cs.level;
         snd_->updateCar(c.playerId, st);
     }
     for (auto it = carSounds_.begin(); it != carSounds_.end();)

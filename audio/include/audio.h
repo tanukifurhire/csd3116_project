@@ -48,6 +48,7 @@ struct CarAudioState
     float nitro01 = 0.0f;       // nitro burn 0..1 -> hiss / roar
     bool limiter = false;       // on the rev limiter -> fuel-cut bounce
     bool isLocal = false;       // the player's car: close-miked, louder, little panning
+    float gain = 1.0f;          // 0..1 voice level (e.g. the race-over fade); ramped click-free
 };
 
 struct Config

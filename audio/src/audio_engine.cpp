@@ -361,7 +361,7 @@ struct Engine::Impl
                     v.lastChange = clock;
                     v.st = it->second.st;
                     if (it->second.pendingShift) v.eng.shift();
-                    v.fadeTarget = 1;
+                    v.fadeTarget = std::max(0.0f, std::min(v.st.gain, 1.0f)); // game-side level / fade
                 }
                 if (clock - v.lastChange > 1.0) v.fadeTarget = 0;
             }
@@ -402,6 +402,7 @@ struct Engine::Impl
             slot->st = kv.second.st;
             slot->lastSeq = kv.second.seq;
             slot->lastChange = clock;
+            slot->fadeTarget = std::max(0.0f, std::min(kv.second.st.gain, 1.0f));
             // Per-car seed so each car has its own noise sequence.
             uint32_t seed = (uint32_t)(kv.first * 7 + 1);
             slot->eng.init(kv.second.st.model, fs, seed);

@@ -606,6 +606,7 @@ TEST(cosmetic_gearbox_shifts_like_an_arcade_tach)
     int lastGear = 1, maxGear = 1;
     std::vector<float> drops;
     bool limiterAtTop = false, sixthOnNitro = false, sixthWithout = false;
+    float topMin = 1e9f, topMax = 0, peakRpm = 0; // rpm while cruising at top speed / overall
     for (int i = 0; i < 60 * 30; ++i)
     {
         bool burn = i >= 60 * 18 && i < 60 * 20;          // 2 s of nitro at top speed
@@ -617,24 +618,33 @@ TEST(cosmetic_gearbox_shifts_like_an_arcade_tach)
         gb.update(s.speed, s.nitroActive, s.driftAngle, kFixedDt);
         if (gb.gear() > lastGear && gb.gear() <= 5) drops.push_back(before - gb.rpm());
         maxGear = std::max(maxGear, gb.gear());
-        if (i > 60 * 15 && i < 60 * 18 && gb.revLimiter()) limiterAtTop = true;
+        if (i > 60 * 15 && i < 60 * 18)
+        {
+            limiterAtTop = limiterAtTop || gb.revLimiter();
+            topMin = std::min(topMin, gb.rpm());
+            topMax = std::max(topMax, gb.rpm());
+        }
+        peakRpm = std::max(peakRpm, gb.rpm());
         if (gb.gear() == 6) { if (s.nitroActive) sixthOnNitro = true; else if (i > 60 * 21) sixthWithout = true; }
         lastGear = gb.gear();
     }
     std::printf("    upshift drops:");
     for (float d : drops) std::printf(" %.0f", d);
-    std::printf(" rpm; max gear %d; limiter at top speed %d; 6th on nitro %d; end gear %d at %.1f m/s\n", maxGear,
-                limiterAtTop, sixthOnNitro, gb.gear(), s.speed);
+    std::printf(" rpm; max gear %d; top-speed rpm %.0f..%.0f (limiter %d); peak %.0f; 6th on nitro %d; end gear %d at %.1f m/s\n",
+                maxGear, topMin, topMax, limiterAtTop, peakRpm, sixthOnNitro, gb.gear(), s.speed);
     CHECK(drops.size() == 4);
     for (float d : drops) CHECK(d > 1500.0f && d < 2500.0f);
-    CHECK(limiterAtTop && sixthOnNitro && !sixthWithout);
+    // Cruising at top speed: a steady tone under the redline, never the limiter.
+    CHECK(!limiterAtTop && topMax < 7600.0f && topMax - topMin < 150.0f);
+    CHECK(peakRpm < gb.redlineRpm);
+    CHECK(sixthOnNitro && !sixthWithout);
     CHECK(gb.gear() < 5);  // coasted down => downshifted
     // Idle at rest, never above the redline, wheelspin raises rpm in a drift.
     Gearbox g2;
     g2.update(0.0f, false, 0.0f, 0.5f);
     CHECK(g2.rpm() >= 899.0f && g2.rpm() < 1000.0f && g2.gear() == 1);
     Gearbox a, b;
-    for (int i = 0; i < 60; ++i) { a.update(9.0f, false, 0.0f, kFixedDt); b.update(9.0f, false, 40.0f, kFixedDt); }
+    for (int i = 0; i < 60; ++i) { a.update(5.0f, false, 0.0f, kFixedDt); b.update(5.0f, false, 40.0f, kFixedDt); }
     CHECK(b.rpm() > a.rpm() * 1.08f && b.rpm() <= b.redlineRpm);
 }
 

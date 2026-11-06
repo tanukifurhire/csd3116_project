@@ -215,6 +215,7 @@ private:
         float nitro = 0;
         bool removed = false;
         bool seen = false;
+        float level = 1;       // 1 while racing; fades to 0 once the race is over
     };
     std::map<int32_t, CarSound> carSounds_;
     CarSound &carSound(int32_t id);
