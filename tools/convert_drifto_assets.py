@@ -1470,6 +1470,16 @@ def main():
     ap.add_argument("--force", action="store_true", help="regenerate everything")
     args = ap.parse_args()
 
+    # Already converted by this converter version (e.g. assets/ shipped in the
+    # submission zip, whose unzip timestamps can make make(1) think the script
+    # is newer): nothing to do -- no download, no regeneration. Bump
+    # FORMAT_VERSION / CONVERTER_STAMP or pass --force to regenerate.
+    stamp_path = os.path.join(args.out, ".stamp")
+    if not args.force and os.path.exists(stamp_path) and read_text(stamp_path).strip() == CONVERTER_STAMP:
+        os.utime(stamp_path)  # newer than the script now, so make stops asking
+        log("up to date (%s) -> %s" % (CONVERTER_STAMP, args.out))
+        return
+
     root = args.source if args.source else fetch_source(args.build, args.offline)
     log("source:", root)
     out = args.out

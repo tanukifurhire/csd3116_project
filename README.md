@@ -72,7 +72,7 @@ pkg-config --exists glfw3 && echo "GLFW OK"
 
 **Compile the project**
 ```bash
-make certs assets   # DDS Security certificates (only if certs/ is missing) + converted models/HUD (once)
+make certs assets   # certs + converted models/HUD; both ship in the submission zip, so this is a no-op there
 make all            # legacy server/client + drifto, api_server, game_server
 ```
 This compiles the project with all the necessary tools, libraries and links with OpenGL/GLFW/DDS.
@@ -88,6 +88,13 @@ longer deletes it. Only run `make clean-certs certs` if you want a fresh set
 for your own local servers -- you then can't join ours. The CA's private key is
 not included; the server cert/key are, so local servers built from this folder
 work with the same certs.
+
+**Assets (`assets/`) -- included.** The submission also ships the converted
+models, textures, skyboxes, HUD sprites and audio in `assets/`, so no download
+or conversion is needed (`make assets` sees they are current and does nothing).
+They come from third-party sources credited in `assets/CREDITS.txt`, which are
+not ours to redistribute further. In a git checkout `assets/` is not committed:
+`make assets` downloads and converts them.
 
 ### Run the game (Drifto)
 
@@ -160,7 +167,7 @@ Windows than from WSL2, because WSL2's NAT networking blocks LAN multicast.
   servers' 0.10.4). This takes about 15–30 minutes once. Later builds reuse the binary cache in
   `%LOCALAPPDATA%\vcpkg\archives`.
 - Linux side (for the runtime files): `make assets` and `make certs` in WSL.
-  `assets/` and `certs/` are not in git (the submission zip includes `certs/`);
+  `assets/` and `certs/` are not in git (the submission zip includes both);
   the sync script copies them over.
 
 ### Build
