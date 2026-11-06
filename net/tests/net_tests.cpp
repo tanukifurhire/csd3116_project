@@ -212,7 +212,7 @@ WorldSnapshot makeSnap(uint32_t tick, int ncars, const std::vector<int32_t> &ids
         c.distance = tick * 3.0f;
         c.trackSection = tick / 10;
         c.flags = (uint8_t)(kCarAlive | kCarDrifting | ((tick + i) % 2 ? kCarNitro : 0) | (i == 1 ? kCarSlipstream : 0) |
-                            (i == 3 ? kCarEliminated : 0) | (i == 2 ? kCarGhost : 0));
+                            (i == 3 ? kCarEliminated : 0) | (i == 2 ? kCarGhost : 0) | (i == 0 ? kCarModelRx7 : 0));
         c.nitro = ((tick + i) % 101) / 100.f;
         c.place = (uint8_t)(i == 3 ? 0 : i + 1);
         c.eliminatedOrder = (uint8_t)(i == 3 ? 1 : 0);
@@ -326,6 +326,7 @@ CarInput expectedInput(uint32_t t)
     in.brake = (t % 5) ? 0.f : 0.5f;
     in.handbrake = (t % 7) == 0;
     in.nitro = (t % 3) == 0;
+    in.carModel = (t % 4) == 1 ? 1 : 0; // cosmetic car choice: spare input flag bit
     return in;
 }
 
@@ -334,7 +335,8 @@ void checkInput(const NetClient::PlayerInput &pi, int32_t hostId)
     if (pi.playerId == hostId) return;
     CarInput e = expectedInput(pi.input.tick);
     if (std::fabs(pi.input.steer - e.steer) > 0.5f / 127.f + 1e-6f || std::fabs(pi.input.throttle - e.throttle) > 0.5f / 255.f + 1e-6f ||
-        std::fabs(pi.input.brake - e.brake) > 0.5f / 255.f + 1e-6f || pi.input.handbrake != e.handbrake || pi.input.nitro != e.nitro)
+        std::fabs(pi.input.brake - e.brake) > 0.5f / 255.f + 1e-6f || pi.input.handbrake != e.handbrake || pi.input.nitro != e.nitro ||
+        pi.input.carModel != e.carModel)
         g_inputContentOk = false;
 }
 
@@ -470,7 +472,7 @@ void scenarioRoomUdp()
     check(g1 >= 235 && g2 >= 235, "host received guests' inputs (" + std::to_string(g1) + "/240, " + std::to_string(g2) + "/240)");
     check(gh == 240, "host's own inputs short-circuited locally (" + std::to_string(gh) + "/240)");
     check(!dups, "no duplicate (playerId, tick) despite 5x redundancy");
-    check(g_inputContentOk, "input contents round-trip (steer/throttle/brake quantized, handbrake + nitro bits)");
+    check(g_inputContentOk, "input contents round-trip (steer/throttle/brake quantized, handbrake + nitro + car model bits)");
     WorldSnapshot none;
     check(!p1->nc.takeLatestSnapshot(none), "no snapshot before host publishes");
     check(p1->nc.takeInputs().empty(), "non-host gets no inputs (routed to host only)");

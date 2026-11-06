@@ -20,7 +20,8 @@ BotProfile botPreset(BotPreset preset)
     case BotPreset::Rookie: // slow to react, wobbly, short sight, no safety net
         p.name = "Rookie";
         p.pace = 0.9f;
-        p.topSpeedFactor = 0.7f; // ~ no nitro
+        p.topSpeedFactor = 0.7f; // little nitro: mostly to empty a full gauge
+        p.nitroEagerness = 0.25f;
         p.aggression = 0.1f;
         p.reactionTicks = 7;
         p.steerNoise = 0.45f;
@@ -34,6 +35,7 @@ BotProfile botPreset(BotPreset preset)
         p.name = "Racer";
         p.pace = 1.0f;
         p.topSpeedFactor = 0.9f;
+        p.nitroEagerness = 0.6f;
         p.aggression = 0.3f;
         p.reactionTicks = 2;
         p.steerNoise = 0.06f;
@@ -46,6 +48,7 @@ BotProfile botPreset(BotPreset preset)
         p.name = "Bully";
         p.pace = 0.97f;
         p.topSpeedFactor = 1.0f;
+        p.nitroEagerness = 1.0f;
         p.aggression = 0.95f;
         p.reactionTicks = 2;
         p.steerNoise = 0.08f;
@@ -58,6 +61,7 @@ BotProfile botPreset(BotPreset preset)
         p.name = "Ace";
         p.pace = 1.05f;
         p.topSpeedFactor = 1.0f;
+        p.nitroEagerness = 0.85f;
         p.aggression = 0.6f;
         p.reactionTicks = 0;
         p.steerNoise = 0.0f;
@@ -405,6 +409,7 @@ net::CarInput BotDriver::drive(const CarSimState &car, const Track &track, const
     {
         pursuitId = 0;
         planTicks = 0;
+        planNitro = false;
         lineShift = 0;
         stuckTime = recoverTime = 0;
         for (float &h : steerHistory) h = 0;
@@ -519,13 +524,23 @@ net::CarInput BotDriver::drive(const CarSimState &car, const Track &track, const
             const int nCand = prof.planCandidates >= 5 ? 5 : 3;
             const float cand5[5] = {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f}, cand3[3] = {-1.0f, 0.0f, 1.0f};
             const float *cand = nCand == 5 ? cand5 : cand3;
-            auto evaluate = [&](int a, int b) { // a < 0: closed-loop direct mapping
+            // a < 0: closed-loop direct mapping. nitro: hold the key for the
+            // whole look-ahead. tail > 0 makes it the nitro safety check: the
+            // steering goes through this driver's own noise and reaction lag
+            // (a laggy driver must not trust a perfect rollout), and after the
+            // look-ahead the car drives `tail` more ticks off the key with the
+            // direct mapping (not scored) -- can it still make what follows?
+            // maxWall (if given) gets the hardest barrier hit.
+            const int lag = std::clamp(prof.reactionTicks, 0, 15);
+            auto evaluate = [&](int a, int b, bool nitro = false, float *maxWall = nullptr, int tail = 0) {
                 CarSimState s = car;
-                float cost = 0;
-                for (int k = 1; k <= H; ++k)
+                float cost = 0, gained = 0;
+                float wanted[128];
+                const int n = std::min(H + tail, 128);
+                for (int k = 1; k <= n; ++k)
                 {
                     float st;
-                    if (a < 0)
+                    if (a < 0 || k > H)
                     {
                         if (k == 1) st = reactive;
                         else
@@ -535,8 +550,18 @@ net::CarInput BotDriver::drive(const CarSimState &car, const Track &track, const
                         }
                     }
                     else st = k <= h1 ? cand[a] : cand[b];
-                    stepCar(s, driveInput(0, st, false), track, params);
+                    if (tail > 0)
+                    {
+                        if (prof.steerNoise > 0)
+                            st = dm::clampf(st + prof.steerNoise * 0.6f * noise(seed, tick + k - 1), -1.0f, 1.0f);
+                        wanted[k - 1] = st;
+                        // What drive() will actually output at this tick.
+                        st = k - 1 < lag ? steerHistory[(historyPos + 16 + k - 1 - lag) % 16] : wanted[k - 1 - lag];
+                    }
+                    stepCar(s, driveInput(0, st, nitro && k <= H), track, params);
                     if (!s.alive) return 1e6f - 1e3f * k;
+                    if (maxWall) *maxWall = std::fmax(*maxWall, s.impactWall);
+                    if (k > H) continue;
                     if (s.impactWall > 1.0f) cost += 2.0f * s.impactWall * s.impactWall;
                     if (k % 3 == 0) cost += contactCost(f, s, k * dt);
                     if (k % 9 == 0)
@@ -545,20 +570,53 @@ net::CarInput BotDriver::drive(const CarSimState &car, const Track &track, const
                         dm::Vec3 err = flat(s.velocity) - sf.desiredVelocity;
                         cost += 0.15f * dm::dot(err, err);
                     }
+                    if (k == H) gained = s.distance - car.distance;
                 }
-                return cost - 1.0f * (s.distance - car.distance);
+                return cost - 1.0f * gained;
             };
             float best = evaluate(-1, 0);
+            int bestA = -1, bestB = 0;
             planSteer = 0;
             planReactive = true;
             for (int a = 0; a < nCand; ++a)
                 for (int b = 0; b < nCand; ++b)
                 {
                     float c = evaluate(a, b);
-                    if (c < best - 0.5f) { best = c; planSteer = cand[a]; planReactive = false; }
+                    if (c < best - 0.5f) { best = c; planSteer = cand[a]; planReactive = false; bestA = a; bestB = b; }
                 }
             planTicks = prof.replanTicks;
             debug.planCost = best;
+
+            // Nitro check: the winning plan again with the key held all the
+            // way, then as long again off the key. It must stay controllable
+            // throughout -- no wreck, no barrier hit. A discretionary burn must
+            // also cost at most a preset-scaled slack more than the plan
+            // without it (the cost pays for overspeed against the arrival
+            // profile and rewards the extra distance). A full gauge (sitting
+            // on it wastes the recharge) and a ram that needs the closing
+            // speed for a takedown get a much bigger slack: the burn only has
+            // to stay controllable and clear of the other cars.
+            planNitro = false;
+            if (car.nitro >= params.nitroMinStart || car.nitroActive)
+            {
+                const float eager = dm::clampf(prof.nitroEagerness, 0.0f, 1.0f);
+                bool must = car.nitro > 0.95f;
+                if (f.prey)
+                {
+                    dm::Vec3 rel = flat(f.prey->position - car.position);
+                    float closing = dm::dot(flat(car.velocity - f.prey->velocity), flatDir(rel));
+                    if (closing < takedownSpeed + 2.0f && dm::length(rel) < 40.0f) must = true;
+                }
+                // Discretionary burns keep a little in reserve (less the keener
+                // the driver); a ram or a full gauge doesn't wait.
+                bool want = must || car.nitroActive || car.nitro > nitroMinGauge * (1.0f - 0.8f * eager);
+                if (want)
+                {
+                    float wall = 0;
+                    float c = evaluate(bestA, bestB, true, &wall, H);
+                    planNitro = c < 1e5f && wall < 1.5f && c <= best + (must ? 40.0f : 2.0f + 14.0f * eager);
+                }
+            }
         }
         --planTicks;
         useReactive = planReactive;
@@ -566,13 +624,20 @@ net::CarInput BotDriver::drive(const CarSimState &car, const Track &track, const
     float steer = useReactive ? reactive : planSteer;
     debug.planned = !useReactive;
 
-    // Nitro: well under the speed the road ahead allows and nothing in the
-    // way (it costs steering, so not mid-slide) -- or to make a ram count.
-    bool nitro = car.nitro > nitroMinGauge && std::fabs(car.driftAngle) < 22.0f && now.danger < 0.2f &&
-                 car.speed < now.targetSpeed - 3.0f && car.speed < f.vCap - 1.0f && std::fabs(steer) <= 0.5f;
-    if (f.prey && car.nitro > 0.08f && std::fabs(car.driftAngle) < 30.0f && now.danger < 0.3f &&
-        car.speed < now.targetSpeed - 1.0f)
-        nitro = true;
+    bool nitro;
+    if (prof.planHorizon > 0)
+        // The look-ahead's verdict, vetoed by a big slide, a wall right there,
+        // or (timid drivers) already being at the speed the road allows.
+        nitro = planNitro && std::fabs(car.driftAngle) < 35.0f && now.danger < 0.6f &&
+                car.speed < now.targetSpeed + 10.0f * (prof.nitroEagerness - 0.4f);
+    else
+        // No look-ahead: well under the speed the road ahead allows and
+        // nothing in the way (it costs steering, so not mid-slide) -- or to
+        // make a ram count.
+        nitro = (car.nitro > nitroMinGauge && std::fabs(car.driftAngle) < 22.0f && now.danger < 0.2f &&
+                 car.speed < now.targetSpeed - 3.0f && car.speed < f.vCap - 1.0f && std::fabs(steer) <= 0.5f) ||
+                (f.prey && car.nitro > 0.08f && std::fabs(car.driftAngle) < 30.0f && now.danger < 0.3f &&
+                 car.speed < now.targetSpeed - 1.0f);
 
     // --- the human factor: steering error and reaction lag -----------------
     if (prof.steerNoise > 0) steer = dm::clampf(steer + prof.steerNoise * 0.6f * noise(seed, tick), -1.0f, 1.0f);

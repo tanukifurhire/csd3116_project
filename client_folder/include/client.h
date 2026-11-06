@@ -8,7 +8,8 @@
 //               (roster, ready, host starts) -> Race (countdown/racing/
 //               results, driven by the host) -> back to Lobby
 // Controls: auto-throttle, A/D or Left/Right steer, Space nitro, Esc back.
-// Eliminated players spectate (Left/Right switches car).
+// Eliminated players spectate (Left/Right switches car). Menu, room list and
+// lobby: A/D or Left/Right picks the car (AE86 / RX-7, cosmetic, remembered).
 #pragma once
 
 #include <deque>
@@ -56,6 +57,7 @@ struct Options
     int fpsCap = 60;                 // frame limiter (vsync doesn't throttle llvmpipe on XWayland)
     bool mute = false;               // --mute: no sound at all
     float volume = -1.0f;            // --volume 0..1 (< 0 = remembered setting, else 0.8)
+    int carModel = -1;               // --car ae86|rx7 (< 0 = remembered setting, else AE86)
     // Automation (smoke tests / demos): log in, join-or-create a room, ready
     // up, and (host) start once `autoStart` players are in the room.
     std::string autoLogin;           // "NAME:PASS" (online) or "NAME" (LAN)
@@ -182,6 +184,8 @@ private:
     std::string message_;
     std::string status_;
     int menuIndex_ = 0;
+    int carModel_ = 0;               // our car: 0 = AE86, 1 = RX-7 (cosmetic, remembered)
+    void setCarModel(int model);
     TextField nameField_, passField_, roomField_, apiField_;
     bool lanMode_ = false;           // the multiplayer mode picked in the menu
     bool netLan_ = false;            // ...and the one the NetClient was started with

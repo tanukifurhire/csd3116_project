@@ -90,7 +90,8 @@ Other modes, no servers needed:
 ./drifto --offline --bots 3         # race against bots
 ./drifto --lan                      # LAN: rooms are discovered on the local network
 ```
-Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting), Esc back.
+Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting; a burn needs 5% to start), Esc back.
+In the menus, room list and lobby A/D or Left/Right picks your car (AE86 / RX-7, same physics; remembered).
 Lobby: H host / C create a room, Space ready, Enter start (host). Max 4 players per room.
 All players need the same `certs/` (or all use `--insecure`). See `docs/MULTIPLAYER.md`
 for deployment on a public server, ports and the LAN details.

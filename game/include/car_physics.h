@@ -122,6 +122,7 @@ struct CarParams
     float nitroRechargeRefAngle = 30.0f;
     float nitroRechargeMaxFactor = 2.0f; // angle factor cap (60 deg+)
     float nitroSteerScale = 0.55f;     // the price: much less steering authority
+    float nitroMinStart = 0.05f;       // gauge needed to START a burn (a running one may empty it)
 
     // --- slipstream (new; whether we're in a wake is decided by stepWorld) -
     float slipstreamAccel = 2.6f;      // flat extra drive

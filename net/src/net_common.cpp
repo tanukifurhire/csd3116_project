@@ -94,7 +94,7 @@ void packInput(const CarInput &in, drifto_InputW &out)
     out.steer = (uint8_t)(int8_t)s;
     out.throttle = qu8(in.throttle);
     out.brake = qu8(in.brake);
-    out.flags = (in.handbrake ? 1 : 0) | (in.nitro ? 2 : 0);
+    out.flags = (in.handbrake ? 1 : 0) | (in.nitro ? 2 : 0) | (in.carModel ? 4 : 0); // bit2: car choice
 }
 
 CarInput unpackInput(const drifto_InputW &in)
@@ -106,6 +106,7 @@ CarInput unpackInput(const drifto_InputW &in)
     o.brake = in.brake / 255.f;
     o.handbrake = (in.flags & 1) != 0;
     o.nitro = (in.flags & 2) != 0;
+    o.carModel = (in.flags & 4) ? 1 : 0;
     return o;
 }
 

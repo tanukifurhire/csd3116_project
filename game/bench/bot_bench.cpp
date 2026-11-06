@@ -103,8 +103,10 @@ struct Stats
     double carSeconds = 0, aliveSeconds = 0, metres = 0;
     int wallWrecks = 0, takedownsSuffered = 0, otherDeaths = 0, takedownsDealt = 0, wallTouches = 0;
     int contacts = 0, hardContacts = 0;
+    double nitroSeconds = 0, fullGaugeSeconds = 0; // burning / sitting on a full gauge (alive)
     void add(const Stats &o)
     {
+        nitroSeconds += o.nitroSeconds; fullGaugeSeconds += o.fullGaugeSeconds;
         carSeconds += o.carSeconds; aliveSeconds += o.aliveSeconds; metres += o.metres;
         wallWrecks += o.wallWrecks; takedownsSuffered += o.takedownsSuffered; otherDeaths += o.otherDeaths;
         takedownsDealt += o.takedownsDealt; wallTouches += o.wallTouches; contacts += o.contacts;
@@ -115,9 +117,11 @@ struct Stats
     {
         double min = carSeconds / 60.0;
         std::printf("  %-28s wallWrecks/min %5.2f  deaths/min %5.2f  takedownsSuffered/min %4.2f  dealt/min %4.2f  "
-                    "m/min %6.0f  survival %5.1f s  wallTouches/min %5.1f\n",
+                    "m/min %6.0f  survival %5.1f s  wallTouches/min %5.1f  nitro %4.1f%%  fullGauge %4.1f%%\n",
                     label, wallWrecks / min, deaths() / min, takedownsSuffered / min, takedownsDealt / min, metres / min,
-                    aliveSeconds / std::max(1, deaths()), wallTouches / min);
+                    aliveSeconds / std::max(1, deaths()), wallTouches / min,
+                    100.0 * nitroSeconds / std::max(1e-9, aliveSeconds),
+                    100.0 * fullGaugeSeconds / std::max(1e-9, aliveSeconds));
     }
 };
 
@@ -197,6 +201,8 @@ Result runRace(const std::vector<Kind> &kinds, uint32_t seed, float seconds, boo
             const CarSimState &b = before[i], &a = cars[i];
             st.carSeconds += kFixedDt;
             if (a.alive) st.aliveSeconds += kFixedDt;
+            if (a.alive && a.nitroActive) st.nitroSeconds += kFixedDt;
+            if (a.alive && b.nitro >= 0.999f) st.fullGaugeSeconds += kFixedDt;
             if (b.alive && !a.alive)
             {
                 if (a.takedownEvent == 2) ++st.takedownsSuffered;

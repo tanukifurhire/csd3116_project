@@ -281,12 +281,11 @@ void WorldView::onSimTick(const game::Track &track, const std::vector<game::CarV
     }
 }
 
-// Choose the model: even looks AE86, odd looks RX-7, with fallback to the other one.
-const WorldView::CarModel &WorldView::carModelFor(int look) const
+// Choose the model (CarView::model: 0 = AE86, 1 = RX-7), with fallback to the other one.
+const WorldView::CarModel &WorldView::carModelFor(int model) const
 {
-    // Even looks are the AE86 (the original's car), odd ones the RX-7;
-    // whichever exists if only one was converted.
-    bool wantRx7 = (look % 2) == 1;
+    // The player's pick (bots: by look); whichever exists if only one was converted.
+    bool wantRx7 = model == 1;
     const CarModel &a = ae86_, &b = rx7_;
     bool haveA = a.full || a.body, haveB = b.full != 0;
     if (wantRx7) return haveB ? b : a;
@@ -300,7 +299,7 @@ const WorldView::CarModel &WorldView::carModelFor(int look) const
 void WorldView::drawCar(const game::CarView &car, CarAnim &anim, float dt, float time, bool cameraTarget)
 {
     const game::CarParams &p = game::defaultCarParams();
-    const CarModel &m = carModelFor(car.look);
+    const CarModel &m = carModelFor(car.model);
     gfx::DrawParams dp;
     dp.tint = kLookTint[((car.look % 4) + 4) % 4];
     if (!m.full && !m.body) dp.tint = lookColor(car.look); // box car: paint it

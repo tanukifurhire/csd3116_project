@@ -176,7 +176,7 @@ twice and a late joiner gets `MatchStarted` + the current phase. Every client
 | rotation | unit quaternion, 4 x int16 (* 32767, w >= 0) |
 | velocity / angularVelocity | int16 x3 @ 1 cm/s / 1 mrad/s (+-327 m/s, +-32 rad/s) |
 | driftScore, distance | float |
-| flags | octet = `net::CarFlag` bits (alive, drifting, crashed, nitro, slipstream, eliminated) |
+| flags | octet = `net::CarFlag` bits (alive, drifting, crashed, nitro, slipstream, eliminated, ghost, RX-7 model) |
 | nitro gauge 0..1 | octet (* 255, error <= 0.002) |
 | place, eliminatedOrder | octet each |
 
@@ -184,7 +184,10 @@ Per snapshot (header): hostTick, hostTimeUs, phase, phaseTimer,
 `eliminationTimer` (float), `eliminationStage` (octet), `lastPlacePlayerId`,
 `winnerPlayerId` (int32). A 4-car snapshot is ~270 B payload (~8 KB/s per
 client at 30 Hz). Inputs are 8 B each: tick, steer int8 (* 127),
-throttle/brake uint8 (* 255), flags octet (bit0 handbrake, **bit1 nitro**);
+throttle/brake uint8 (* 255), flags octet (bit0 handbrake, **bit1 nitro**,
+bit2 car model: the cosmetic AE86 / RX-7 pick, which the host copies into
+the car's `kCarModelRx7` snapshot flag -- spare bits, so the servers relay
+it unchanged);
 an input packet carries the last 5, ~64 B. All of it is round-trip checked by
 `net_tests`.
 

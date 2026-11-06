@@ -54,6 +54,11 @@ struct CarInput
     float brake = 0;    // 0..1
     bool handbrake = false;
     bool nitro = false; // held: burn nitro gauge
+    // Cosmetic car choice (0 = AE86, 1 = RX-7): same physics, the host
+    // copies it into CarState::flags (kCarModelRx7) so every peer draws and
+    // hears the right car. Rides in a spare bit of the existing input flags
+    // octet, so the wire format (and the relaying servers) are unchanged.
+    uint8_t carModel = 0;
 };
 
 // Authoritative state of one car, as simulated by the host.
@@ -84,6 +89,7 @@ enum CarFlag : uint8_t
     kCarSlipstream = 1 << 4, // in another car's wake
     kCarEliminated = 1 << 5,
     kCarGhost = 1 << 6,      // just respawned: no car-car contact, drawn translucent
+    kCarModelRx7 = 1 << 7,   // cosmetic: the player picked the RX-7 (else AE86); see CarInput::carModel
 };
 
 // What the host publishes ~20-30 times per second: match phase + every car.

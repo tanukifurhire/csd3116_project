@@ -714,6 +714,55 @@ TEST(nitro_burns_for_speed_and_costs_steering)
     CHECK(yawNitro < 0.7f * yawPlain);
 }
 
+TEST(nitro_needs_a_minimum_gauge_to_start)
+{
+    // A burn only STARTS with >= nitroMinStart in the gauge; a running burn
+    // may empty it, and holding the key afterwards can't sip the recharge.
+    Track t(13, allStraights());
+    const CarParams &P = defaultCarParams();
+    const float below = P.nitroMinStart * 0.8f;
+    CarSimState a = spawnCar(t, 0, 5.0f, 0.0f, 15.0f);
+    a.nitro = below;
+    for (int i = 0; i < 30; ++i) stepCar(a, driveInput(i, 0.0f, true), t);
+    CHECK(!a.nitroActive && a.nitro == below);
+
+    CarSimState b = spawnCar(t, 0, 5.0f, 0.0f, 15.0f);
+    b.nitro = P.nitroMinStart;
+    int burnTicks = 0;
+    for (int i = 0; i < 120 && (i == 0 || b.nitroActive); ++i)
+    {
+        stepCar(b, driveInput(i, 0.0f, true), t);
+        burnTicks += b.nitroActive;
+    }
+    std::printf("    a %.0f%% gauge burns %d ticks down to %.3f, then stops\n", 100.0f * P.nitroMinStart, burnTicks, b.nitro);
+    CHECK(burnTicks >= 5 && b.nitro == 0.0f && !b.nitroActive);
+    // Recharged a little, key still held: no restart below the threshold...
+    b.nitro = below;
+    for (int i = 0; i < 10; ++i) stepCar(b, driveInput(i, 0.0f, true), t);
+    CHECK(!b.nitroActive && b.nitro == below);
+    // ...and at it the burn starts again, and keeps going below it.
+    b.nitro = P.nitroMinStart + 0.01f;
+    stepCar(b, driveInput(0, 0.0f, true), t);
+    CHECK(b.nitroActive);
+    for (int i = 0; i < 4; ++i) stepCar(b, driveInput(i, 0.0f, true), t);
+    CHECK(b.nitroActive && b.nitro < P.nitroMinStart);
+
+    // The latch is the replicated nitroActive flag: a client rebuilding the
+    // state from the host's CarState (reconcile / replay) decides the same.
+    CarSimState burning = b, idle = b;
+    idle.nitroActive = false; // same gauge, but not burning last tick
+    for (const CarSimState *src : {&burning, &idle})
+    {
+        CarSimState host = *src, replica = spawnCar(t, 0, 50.0f, 1.0f, 3.0f);
+        applyNetState(replica, toNetState(host, 1, 0));
+        replica.nitro = host.nitro; // (the wire quantizes the gauge to a byte; compare the rule, not rounding)
+        stepCar(host, driveInput(0, 0.0f, true), t);
+        stepCar(replica, driveInput(0, 0.0f, true), t);
+        CHECK(host.nitroActive == replica.nitroActive);
+        CHECK(host.nitroActive == (src == &burning));
+    }
+}
+
 TEST(slipstream_only_inside_the_wake)
 {
     Track t(13, allStraights());
@@ -1141,6 +1190,77 @@ TEST(bot_reynolds_beats_the_old_planner_and_presets_differ)
     CHECK(newW <= oldW);
     CHECK_MSG(newM > 1.1 * oldM, "new %.0f m vs old %.0f m", newM, oldM);
     CHECK(rookieW > newW);
+}
+
+TEST(bot_nitro_burns_when_controllable_full_gauge_and_rams)
+{
+    // Full gauge on an open straight: every preset burns soon.
+    for (BotPreset preset : {BotPreset::Rookie, BotPreset::Racer, BotPreset::Bully, BotPreset::Ace})
+    {
+        Track t(22, allStraights());
+        CarSimState c = spawnCar(t, 1, 5.0f, 0.0f, 12.0f);
+        c.nitro = 1.0f;
+        BotDriver b;
+        b.profile = botPreset(preset);
+        int firstBurn = -1;
+        for (int i = 0; i < 120 && firstBurn < 0; ++i)
+        {
+            t.ensureGenerated(c.section + 12);
+            stepCar(c, b.drive(c, t, defaultCarParams(), i), t);
+            if (c.nitroActive) firstBurn = i;
+        }
+        std::printf("    %s: full gauge on a straight, first burn after %d ticks\n", botPresetName(preset), firstBurn);
+        CHECK(firstBurn >= 0 && firstBurn < 30);
+    }
+    // Ram: a Bully behind a slow car, half a gauge (no full-gauge reason to
+    // burn) -- it burns while it hunts, and gets its takedown.
+    {
+        Track t(21, allStraights());
+        CarSimState hunter = spawnCar(t, 1, 5.0f, 0.0f, 14.0f), slow = spawnCar(t, 1, 35.0f, 0.5f, 10.0f);
+        hunter.nitro = 0.5f;
+        BotDriver b;
+        b.profile = botPreset(BotPreset::Bully);
+        int huntBurn = 0;
+        for (int i = 0; i < 60 * 4; ++i)
+        {
+            t.ensureGenerated(hunter.section + 12);
+            net::CarInput in = b.drive(hunter, t, defaultCarParams(), i, {{1, &hunter}, {2, &slow}});
+            huntBurn += b.debug.pursuitTarget == 2 && in.nitro;
+            std::vector<WorldCar> w{{1, &hunter, in, false}, {2, &slow, holdInput(i), false}};
+            stepWorld(w, t, defaultCarParams(), defaultRaceParams());
+        }
+        std::printf("    Bully ram: %d ticks on nitro while hunting, takedowns %u, own wrecks %u\n", huntBurn,
+                    hunter.takedowns, hunter.deaths);
+        CHECK(huntBurn > 10 && hunter.takedowns >= 1 && hunter.deaths == 0);
+    }
+    // Real tracks, 60 s solo: Racer and Ace sit on a full gauge far less
+    // than they did (~70-80% of the time before), use nitro, and still don't
+    // wreck.
+    for (BotPreset preset : {BotPreset::Racer, BotPreset::Ace})
+    {
+        int full = 0, burn = 0, ticks = 0;
+        uint32_t wrecks = 0;
+        for (uint32_t seed : {1000u, 1017u})
+        {
+            Track t(seed);
+            CarSimState c = spawnOnGrid(t, 0);
+            BotDriver b;
+            b.profile = botPreset(preset);
+            for (int i = 0; i < 60 * 60; ++i)
+            {
+                t.update(c.section);
+                t.ensureGenerated(c.section + 30);
+                full += c.alive && c.nitro >= 0.999f;
+                stepCar(c, b.drive(c, t, defaultCarParams(), i), t);
+                burn += c.nitroActive;
+                ++ticks;
+            }
+            wrecks += c.deaths;
+        }
+        std::printf("    %s 2 x 60 s: full gauge %.0f%% of the time, burning %.0f%%, %u wrecks\n", botPresetName(preset),
+                    100.0 * full / ticks, 100.0 * burn / ticks, wrecks);
+        CHECK(full < ticks * 6 / 10 && burn > ticks / 25 && wrecks == 0);
+    }
 }
 
 TEST(bot_pack_race_is_deterministic)
@@ -1775,6 +1895,51 @@ TEST(session_phases_flow_and_host_migration)
     CHECK(!rig.client.active());
     std::vector<net::MatchPhase> &ph = rig.clientEp.phases;
     CHECK(ph.size() == 2 && ph[0] == net::MatchPhase::Results && ph[1] == net::MatchPhase::Lobby);
+}
+
+TEST(session_car_choice_reaches_every_peer)
+{
+    // The cosmetic car pick rides on the inputs (CarInput::carModel) to the
+    // host, which republishes it in the snapshot flags (kCarModelRx7).
+    // Picks are the opposite of the slot defaults (look parity: id 1 AE86,
+    // id 2 RX-7) so a default can't pass for a delivered choice.
+    SessionConfig cfg;
+    cfg.countdownSeconds = 1.0f;
+    NetRig rig(cfg);
+    rig.hub.latencyTicks = 4;
+    rig.host.setLocalCarModel(1);   // host: RX-7
+    rig.client.setLocalCarModel(0); // client: AE86
+    auto modelIn = [](const MultiplayerSession &s, int32_t id) {
+        for (const CarView &v : s.carViews(0.0f))
+            if (v.playerId == id) return v.model;
+        return -1;
+    };
+    for (int i = 0; i < 30; ++i) rig.step(); // still the countdown
+    CHECK(rig.host.phase() == net::MatchPhase::Countdown);
+    CHECK(modelIn(rig.host, 1) == 1 && modelIn(rig.host, 2) == 0);
+    CHECK(modelIn(rig.client, 2) == 0 && modelIn(rig.client, 1) == 1);
+    CHECK(rig.client.carModelOf(1) == 1 && rig.host.carModelOf(2) == 0);
+    // Changed mid-race: everyone follows within a round trip.
+    for (int i = 0; i < 60; ++i) rig.step();
+    rig.client.resetStats();
+    rig.client.setLocalCarModel(1);
+    rig.host.setLocalCarModel(0);
+    for (int i = 0; i < 20; ++i) rig.step();
+    CHECK(modelIn(rig.host, 2) == 1 && modelIn(rig.client, 1) == 0);
+    // Purely cosmetic: the client's prediction still matches the host.
+    CHECK(rig.client.stats().hardResets == 0 && rig.client.stats().reconciliations > 5 &&
+          rig.client.stats().maxCorrection < 0.05f);
+    // Host migration: the new host keeps everyone's car.
+    rig.hub.hostId = 2;
+    rig.client.onHostChanged(true);
+    CHECK(rig.client.carModelOf(1) == 0 && rig.client.carModelOf(2) == 1);
+
+    // Offline: bots keep the slot default, the player's pick is honoured.
+    LoopbackTransport lb(1);
+    MultiplayerSession off(lb, cfg);
+    off.setLocalCarModel(1);
+    off.hostStartMatch(5, {1}, {2, 3, 4});
+    CHECK(modelIn(off, 1) == 1 && modelIn(off, 2) == 1 && modelIn(off, 3) == 0 && modelIn(off, 4) == 1);
 }
 
 // ---------------------------------------------------------------------------
