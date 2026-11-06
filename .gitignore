@@ -26,3 +26,18 @@ certs/*.srl
 # Server-side account data (salted password hashes, not source)
 # ============================
 players.auth
+# ============================
+# Drifto build outputs / generated assets
+# ============================
+build/
+drifto
+api_server
+game_server
+gfx_demo
+audio_demo
+lan_probe
+game_tests
+net_tests
+assets/
+bench_hot
+__pycache__/

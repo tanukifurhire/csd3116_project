@@ -1,0 +1,22 @@
+<!-- CycloneDDS domain config: server side of a TCP service (api_server, and
+     game_server's TCP fallback). @PORT@ = listen port, @EXTERNAL@ = address
+     advertised to peers ("auto", or the public IP when behind NAT, from
+     --public-addr). AlwaysUsePeeraddrForUnicast makes the server answer
+     clients over the connection they opened instead of the (private,
+     unreachable) addresses they advertise. -->
+<CycloneDDS>
+  <Domain id="any">
+    <General>
+      <Transport>tcp</Transport>
+      <AllowMulticast>false</AllowMulticast>
+      <ExternalNetworkAddress>@EXTERNAL@</ExternalNetworkAddress>
+    </General>
+    <TCP>
+      <Port>@PORT@</Port>
+      <AlwaysUsePeeraddrForUnicast>true</AlwaysUsePeeraddrForUnicast>
+    </TCP>
+    <Discovery>
+      <ParticipantIndex>none</ParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

@@ -1,0 +1,18 @@
+<!-- CycloneDDS domain config: client side of the game service over UDP.
+     Unicast only (no multicast discovery): the client talks to the game
+     server at @HOST@:@PORT@ and to nobody else. Ephemeral local ports. -->
+<CycloneDDS>
+  <Domain id="any">
+    <General>
+      <Transport>udp</Transport>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>none</ParticipantIndex>
+      <SPDPInterval>1s</SPDPInterval>
+      <Peers>
+        <Peer address="@HOST@:@PORT@"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

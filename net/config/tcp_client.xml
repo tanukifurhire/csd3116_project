@@ -1,0 +1,25 @@
+<!-- CycloneDDS domain config: client side of a TCP service (the API service,
+     and the game service's TCP-443 fallback). Filled in at runtime by
+     net::dds::loadConfig(): @HOST@/@PORT@ = server address. The client
+     doesn't listen (Port -1): it dials the server and all traffic for it
+     flows back over that connection, so it works behind NAT / firewalls
+     that only allow outbound TCP. Built-in copy: net/src/net_common.cpp. -->
+<CycloneDDS>
+  <Domain id="any">
+    <General>
+      <Transport>tcp</Transport>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <TCP>
+      <Port>-1</Port>
+      <AlwaysUsePeeraddrForUnicast>true</AlwaysUsePeeraddrForUnicast>
+    </TCP>
+    <Discovery>
+      <ParticipantIndex>none</ParticipantIndex>
+      <SPDPInterval>2s</SPDPInterval>
+      <Peers>
+        <Peer address="@HOST@:@PORT@"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

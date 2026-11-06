@@ -6,7 +6,8 @@
 
 **Windows**
 - Clone the repository in GitHub Desktop
-- This project only runs in Linux, so you'll have to use WSL (see [run](#run))
+- The servers and the legacy C client run in Linux (WSL); the Drifto game client
+  (`drifto.exe`) also builds natively on Windows -- see [Windows](#windows-native-client)
 
 **Linux**
 To clone the repository: 
@@ -92,3 +93,75 @@ The server stores each account's salted password hash in `players.auth` (created
 ```bash
 make run N=3   # starts the server, then N clients (1-4)
 ```
+## Windows native client
+
+`drifto.exe` (the game client only -- `api_server`/`game_server` stay on Linux)
+builds with MSVC + vcpkg from `CMakeLists.txt` / `vcpkg.json`. The Linux
+makefiles are unchanged. Windows players can use Online mode (the staging
+servers, or Linux servers anywhere) and LAN mode. LAN works better from native
+Windows than from WSL2, because WSL2's NAT networking blocks LAN multicast.
+
+### Prerequisites (Windows)
+
+- **Visual Studio 2022** (Community is fine) with the *Desktop development with
+  C++* workload. It includes MSVC, CMake and **vcpkg**. VS 2026 also works, but the
+  scripts pick 2022.
+- **Git for Windows** on `PATH`. vcpkg uses it to fetch its port registry.
+- Internet access on the first build. vcpkg downloads and builds `glfw3`, `openssl`
+  and `cyclonedds` (0.10.5 with DDS Security, wire-compatible with the Linux
+  servers' 0.10.4). This takes about 15–30 minutes once. Later builds reuse the binary cache in
+  `%LOCALAPPDATA%\vcpkg\archives`.
+- Linux side (for the runtime files): `make assets` and `make certs` in WSL.
+  `assets/` and `certs/` are not in git; the sync script copies them over.
+
+### Build
+
+From WSL (the WSL repo stays the source of truth):
+```bash
+tools/windows/sync_and_build.sh          # rsync to C:\Users\<you>\source\repos\drifto + build Release x64
+tools/windows/sync_and_build.sh --clean  # clean rebuild
+tools/windows/sync_and_build.sh --sync   # copy only
+```
+Or on Windows, in a checkout that has `assets\` and `certs\`:
+```bat
+tools\windows\build.bat
+```
+Output: `build\windows\Release\drifto.exe`. Shaders, `net\config`, `certs`,
+`assets` and the DLLs (GLFW, CycloneDDS + its DDS Security plugins, OpenSSL)
+are copied next to it, so it runs from any folder or by double-click. Don't
+build straight from `\\wsl$\...`: MSVC and vcpkg are slow and unreliable on
+that share.
+
+### Run
+
+```bat
+cd %USERPROFILE%\source\repos\drifto\build\windows\Release
+drifto.exe --help
+drifto.exe --api 121.6.130.7              :: online (staging)
+drifto.exe --lan                          :: LAN, rooms found by multicast
+drifto.exe --lan --lan-peer 192.168.1.20  :: LAN when multicast is blocked
+drifto.exe --headless --offline --fast --races 1 :: no window: quick self-test
+```
+
+- **Windows Defender Firewall**: the first time `drifto.exe` uses the network,
+  Windows asks whether to allow it. Tick **Private networks** (and Public only
+  if you trust it), then click *Allow*. If you dismissed the prompt, LAN games
+  won't be found. Fix it in *Windows Security > Firewall & network protection >
+  Allow an app through firewall* (add `drifto.exe`), or in an admin PowerShell:
+  `New-NetFirewallRule -DisplayName Drifto -Direction Inbound -Program "<path>\drifto.exe" -Action Allow`.
+  Online play only makes outgoing connections, so it works even without the rule.
+- **GPU**: native Windows uses your GPU vendor's OpenGL driver directly. None
+  of the WSL settings (`GALLIUM_DRIVER=d3d12`, `MESA_*`) are needed or used.
+- **Several network adapters** (VPNs such as Tailscale, Radmin, OpenVPN, or
+  Hyper-V/WSL adapters): if LAN rooms don't show up, pin the real adapter with
+  `set DRIFTO_DDS_INTERFACE=Wi-Fi` (an adapter name from `ipconfig`, or its IPv4
+  address, comma-separated for more than one) before starting `drifto.exe`.
+- **Windows and WSL2 on the same PC can't play LAN together** in WSL's default
+  NAT mode. The Hyper-V firewall drops traffic from Windows into the WSL VM
+  (UDP and TCP; checked on this machine), so even `--lan-peer` doesn't help.
+  Use `networkingMode=mirrored` (see `docs/MULTIPLAYER.md`, "LAN mode"), or play
+  Windows against Windows. Online play from Windows to servers inside WSL works
+  through `--api 127.0.0.1`, because WSL forwards TCP on localhost; the game
+  link then falls back to TCP.
+- `lan_probe.exe host|join NAME [--peer IP] [--insecure]` (built next to
+  `drifto.exe`) is a headless LAN check without a window.

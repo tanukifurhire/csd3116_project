@@ -1,0 +1,13 @@
+{
+  "$comment": "Windows client dependencies (CMakeLists.txt). Linux uses the system packages + makefiles.",
+  "name": "drifto",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "glfw3",
+    "openssl",
+    {
+      "name": "cyclonedds",
+      "features": [ "security", "ssl", "idlc" ]
+    }
+  ]
+}

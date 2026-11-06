@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := all
+
 CC   = gcc
 CXX  = g++
 IDLC = idlc
@@ -5,7 +7,6 @@ IDLC = idlc
 IDL_SRC = messages.idl
 IDL_GEN = messages.c messages.h
 
-CXXFLAGS = -std=c++17 -Wall
 
 GLFW_CFLAGS    = $(shell pkg-config --cflags glfw3)
 GLFW_LIBS      = $(shell pkg-config --libs glfw3)
@@ -14,19 +15,51 @@ DDS_LIBS       = $(shell pkg-config --libs CycloneDDS)
 OPENSSL_CFLAGS = $(shell pkg-config --cflags libcrypto)
 OPENSSL_LIBS   = $(shell pkg-config --libs libcrypto)
 
-# C++ port of client/server, built alongside the existing C client/server
-# while the port is in progress (see docs/NETWORKING.md). 'make all' does
-# NOT build these yet -- run 'make cpp' explicitly.
-CLIENT_CPP_SRC = client_folder/src/main.cpp client_folder/src/client.cpp
-SERVER_CPP_SRC = server_folder/src/main.cpp server_folder/src/server.cpp
+# ---------------------------------------------------------------------------
+# Drifto (C++): one shared object tree in build/, one makefile fragment per
+# module so each module owns its own sources/targets:
+#   game/game.mk  -> GAME_OBJS      (+ game_tests)
+#   gfx/gfx.mk    -> GFX_OBJS       (+ gfx_demo, assets)
+#   net/net.mk    -> NET_CLIENT_OBJS, api_server, game_server (+ net_tests)
+# The client executable 'drifto' links all three with client_folder/src.
+# ---------------------------------------------------------------------------
+BUILD    = build
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -MMD -MP -I. -Ithird_party
+CFLAGS_C = -O2 -g -MMD -MP
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(MODULE_CXXFLAGS) -c $< -o $@
+
+GAME_OBJS :=
+GFX_OBJS :=
+NET_CLIENT_OBJS :=
+MODULE_CXXFLAGS :=
+DRIFTO_LIBS :=
+
+include game/game.mk
+include gfx/gfx.mk
+include net/net.mk
+AUDIO_OBJS :=
+AUDIO_LIBS :=
+-include audio/audio.mk
+-include perf/perf.mk
+
+CLIENT_SRCS := $(wildcard client_folder/src/*.cpp)
+CLIENT_OBJS := $(CLIENT_SRCS:%.cpp=$(BUILD)/%.o)
+
+drifto: $(CLIENT_OBJS) $(GAME_OBJS) $(GFX_OBJS) $(NET_CLIENT_OBJS) $(AUDIO_OBJS)
+	$(CXX) -o $@ $^ $(DRIFTO_LIBS) $(GLFW_LIBS) -lGL $(DDS_LIBS) $(OPENSSL_LIBS) $(AUDIO_LIBS) -pthread -lm
+
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 N ?= 1
 
-.PHONY: all clean run certs cpp
+.PHONY: all clean run certs legacy
 
-all: server client certs
+all: legacy drifto api_server game_server
 
-cpp: client_cpp server_cpp
+legacy: server client certs
 
 $(IDL_GEN): $(IDL_SRC)
 	$(IDLC) -l c $(IDL_SRC)
@@ -53,7 +86,7 @@ client: client.c messages.c
 	$(CC) client.c messages.c -o client $(GLFW_CFLAGS) $(GLFW_LIBS) -lGL $(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm
 
 # messages.c/auth.c are plain C translation units, shared as-is with the C++
-# port. Compiled separately with $(CC) (not $(CXX)) and linked into the C++
+# drifto servers. Compiled separately with $(CC) (not $(CXX)) and linked into the C++
 # binaries -- g++ compiles .c input as C++ by default, which would silently
 # change how these files are parsed if built directly by the CXX rules below.
 messages.o: messages.c messages.h
@@ -62,16 +95,9 @@ messages.o: messages.c messages.h
 auth.o: auth.c auth.h
 	$(CC) -c auth.c -o auth.o $(OPENSSL_CFLAGS)
 
-client_cpp: $(CLIENT_CPP_SRC) client_folder/include/client.h messages.o
-	$(CXX) $(CXXFLAGS) -o client_cpp $(CLIENT_CPP_SRC) messages.o \
-		$(GLFW_CFLAGS) $(GLFW_LIBS) -lGL $(DDS_CFLAGS) $(DDS_LIBS) -pthread -lm
-
-server_cpp: $(SERVER_CPP_SRC) server_folder/include/server.h messages.o auth.o
-	$(CXX) $(CXXFLAGS) -o server_cpp $(SERVER_CPP_SRC) messages.o auth.o \
-		$(DDS_CFLAGS) $(DDS_LIBS) $(OPENSSL_CFLAGS) $(OPENSSL_LIBS)
-
 clean:
-	rm -f server client client_cpp server_cpp messages.c messages.h messages.o auth.o
+	rm -f server client client_cpp server_cpp drifto api_server game_server gfx_demo audio_demo game_tests net_tests lan_probe messages.c messages.h messages.o auth.o
+	rm -rf $(BUILD)
 	rm -f certs/*.key certs/*.pem certs/*.p7s certs/*.csr certs/*.srl
 
 # Starts the server, waits a few seconds for it to come up, then launches

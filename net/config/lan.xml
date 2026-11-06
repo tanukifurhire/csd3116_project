@@ -1,0 +1,21 @@
+<!-- CycloneDDS domain config: LAN mode (no servers). UDP with multicast
+     discovery (@MULTICAST@ = "default", or "false" when env
+     DRIFTO_LAN_MULTICAST=0), plus @PEERS@ = <Peers> built from
+     NetClient::Config::lanPeers for networks that block multicast.
+     ParticipantIndex auto gives every process well-known unicast ports
+     (9910+2i discovery / 9911+2i data for domain 10) so a peer given only by
+     IP can be found. Built-in copy: net/src/net_common.cpp. -->
+<CycloneDDS>
+  <Domain id="any">
+    <General>
+      <Transport>udp</Transport>
+      <AllowMulticast>@MULTICAST@</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>20</MaxAutoParticipantIndex>
+      <SPDPInterval>1s</SPDPInterval>
+      @PEERS@
+    </Discovery>
+  </Domain>
+</CycloneDDS>

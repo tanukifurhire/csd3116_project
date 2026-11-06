@@ -5,6 +5,21 @@
  * since all client keys ship in the same repo). Usernames self-register on
  * first join; the password is only ever hashed (PBKDF2-HMAC-SHA256, random
  * per-account salt) - the plaintext is never written to disk or logged.
+ *
+ * Storage: one record per line in the credentials file,
+ *     username:salt_hex:iterations:hash_hex
+ * (16-byte salt, 32-byte hash, 100000 iterations for new accounts). The
+ * iteration count is stored per record so it can be raised later without
+ * invalidating existing accounts. The file is chmod 0600.
+ *
+ * Policy: trust on first use - the first successful call for an unknown name
+ * creates the account (at most AUTH_MAX_USERS); later calls must present the
+ * same password. Names compare case-insensitively. Hash comparison uses
+ * CRYPTO_memcmp (constant time).
+ *
+ * Threading: all state (g_entries, g_num_entries, file appends) is guarded by
+ * g_mutex, so auth_authenticate() may be called from any thread. PBKDF2 runs
+ * while the lock is held, which serialises logins; fine for this player count.
  */
 
 #include "auth.h"
@@ -34,11 +49,13 @@ typedef struct
 	unsigned char hash[AUTH_HASH_LEN];
 } AuthEntry;
 
+// In-memory copy of the credentials file; loaded once by auth_init().
 static AuthEntry g_entries[AUTH_MAX_USERS];
 static int g_num_entries = 0;
 static char g_path[512];
 static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Lower-case hex encode of 'len' bytes into out_hex (needs 2*len+1 bytes).
 static void bytes_to_hex(const unsigned char *bytes, size_t len, char *out_hex)
 {
 	static const char digits[] = "0123456789abcdef";
@@ -50,6 +67,7 @@ static void bytes_to_hex(const unsigned char *bytes, size_t len, char *out_hex)
 	out_hex[len * 2] = '\0';
 }
 
+// Decodes exactly out_len bytes of hex; false on wrong length or bad digits.
 static bool hex_to_bytes(const char *hex, unsigned char *out, size_t out_len)
 {
 	if (strlen(hex) != out_len * 2)
@@ -65,6 +83,7 @@ static bool hex_to_bytes(const char *hex, unsigned char *out, size_t out_len)
 	return true;
 }
 
+// Case-insensitive lookup; index into g_entries or -1.
 static int find_entry(const char *username)
 {
 	for (int i = 0; i < g_num_entries; i++)
@@ -75,6 +94,7 @@ static int find_entry(const char *username)
 	return -1;
 }
 
+// PBKDF2-HMAC-SHA256 of the password with the given salt/iterations -> AUTH_HASH_LEN bytes.
 static bool derive_hash(const char *password, const unsigned char *salt,
 						 unsigned int iterations, unsigned char *out_hash)
 {
@@ -84,6 +104,8 @@ static bool derive_hash(const char *password, const unsigned char *salt,
 							  AUTH_HASH_LEN, out_hash) == 1;
 }
 
+// Reads every well-formed record; malformed lines and records with bad hex are skipped
+// silently. Stops at AUTH_MAX_USERS.
 // Caller must hold g_mutex.
 static void load_from_file(void)
 {
@@ -126,6 +148,8 @@ static void load_from_file(void)
 	fclose(fp);
 }
 
+// Loads the credentials file (if any), then creates it if missing and restricts it to
+// the owner. Returns false when the file cannot be opened for appending.
 bool auth_init(const char *path)
 {
 	strncpy(g_path, path, sizeof(g_path) - 1);
@@ -151,6 +175,8 @@ bool auth_init(const char *path)
 	return b_ok;
 }
 
+// Appends one record to the file; false on I/O error so the
+// caller does not keep an account that was never persisted.
 // Caller must hold g_mutex.
 static bool append_entry(const AuthEntry *entry)
 {
@@ -169,6 +195,9 @@ static bool append_entry(const AuthEntry *entry)
 	return true;
 }
 
+// Register-or-verify, under g_mutex. Unknown name: create the account (random salt,
+// PBKDF2 hash, persisted before it is added to memory). Known name: recompute the
+// hash with the stored salt/iterations and compare in constant time.
 AuthResult auth_authenticate(const char *username, const char *password)
 {
 	AuthResult result;
@@ -180,6 +209,7 @@ AuthResult auth_authenticate(const char *username, const char *password)
 	if (index < 0)
 	{
 		// First time this username has been seen - register it.
+		// table full: refuse rather than evict an existing account
 		if (g_num_entries >= AUTH_MAX_USERS)
 		{
 			result = AUTH_ERROR;

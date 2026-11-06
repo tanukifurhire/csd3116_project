@@ -1,0 +1,19 @@
+<!-- CycloneDDS domain config: game_server, UDP flavour. Participant index 0
+     with Ports/Base = udpPort - 10 - 250*domain puts the discovery socket on
+     exactly --udp-port and the data socket on --udp-port + 1 (open both in
+     the firewall). @EXTERNAL@ = --public-addr (or "auto"). -->
+<CycloneDDS>
+  <Domain id="any">
+    <General>
+      <Transport>udp</Transport>
+      <AllowMulticast>false</AllowMulticast>
+      <ExternalNetworkAddress>@EXTERNAL@</ExternalNetworkAddress>
+    </General>
+    <Discovery>
+      <ParticipantIndex>0</ParticipantIndex>
+      <Ports>
+        <Base>@BASE@</Base>
+      </Ports>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

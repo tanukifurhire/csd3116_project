@@ -1,0 +1,302 @@
+// drifto_net.idl -- wire format of the Drifto API + game services.
+// Compiled by idlc into build/net/gen/drifto_net.{c,h} (see net/net.mk).
+// Topic names, QoS and partitions are documented in docs/MULTIPLAYER.md.
+// Conventions:
+//   *_Up topics are written by game clients and read only by servers.
+//   *_Dn topics are written only by servers and read by clients.
+//   Every Up message carries (session|token) so the server can drop forged
+//   traffic; clients never read Up topics (also enforced by permissions.xml).
+module drifto
+{
+  // ===================== API service (TCP domain) =====================
+
+  // Client -> API server. op: see ApiOp in net/src/net_wire.h
+  struct ApiReq
+  {
+    unsigned long long session;   // random per NetClient, picks reply partition
+    unsigned long seq;            // per-session request counter
+    octet op;
+    string<16> name;
+    string<64> password;
+    string<32> roomName;
+    unsigned long roomId;
+    boolean flag;
+  };
+
+  struct RoomInfoW
+  {
+    unsigned long roomId;
+    string<32> name;
+    octet players;
+    octet maxPlayers;
+    boolean inProgress;
+  };
+
+  struct RosterW
+  {
+    long playerId;
+    string<16> name;
+    boolean isHost;
+    boolean ready;
+  };
+
+  // API server -> one client (written in partition "s<session hex>").
+  struct ApiRep
+  {
+    unsigned long long session;
+    unsigned long repSeq;         // per-session reply counter (dedup on re-delivery)
+    unsigned long reqSeq;         // 0 for unsolicited pushes
+    octet kind;                   // see ApiRepKind in net/src/net_wire.h
+    string<64> message;
+    long playerId;
+    unsigned long roomId;
+    long hostId;
+    // game server assignment (kind == Joined)
+    string<64> gsHost;
+    unsigned short gsUdpPort;
+    unsigned short gsTcpPort;
+    unsigned long gsUdpDomain;
+    unsigned long gsTcpDomain;
+    unsigned long long token;     // per (room, player) secret for the game service
+    sequence<RoomInfoW> rooms;
+    sequence<RosterW> roster;
+  };
+
+  // Game server -> API server, ~1 Hz.
+  struct GsBeat
+  {
+    @key string<32> gsId;
+    unsigned long long incarnation;
+    string<64> publicAddr;
+    unsigned short udpPort;       // 0 = UDP service disabled
+    unsigned short tcpPort;
+    unsigned long udpDomain;
+    unsigned long tcpDomain;
+    unsigned long capacity;       // max rooms
+    unsigned long load;           // rooms currently hosted
+  };
+
+  struct GsMember
+  {
+    long playerId;
+    unsigned long long token;
+  };
+
+  // API server -> one game server (partition "gs.<gsId>"), transient-local.
+  struct GsRoom
+  {
+    @key unsigned long roomId;
+    boolean open;
+    long hostId;
+    sequence<GsMember> members;
+  };
+
+  // Game server -> API server: room phase as seen in match control.
+  struct GsRoomStatus
+  {
+    @key unsigned long roomId;
+    string<32> gsId;
+    octet phase;
+  };
+
+  // ===================== Game service (UDP / TCP-443 domains) =====================
+
+  // One quantized input tick (8 bytes).
+  struct InputW
+  {
+    unsigned long tick;
+    octet steer;      // int8 two's complement, steer*127
+    octet throttle;   // 0..255
+    octet brake;      // 0..255
+    octet flags;      // bit0 handbrake, bit1 nitro
+  };
+
+  struct InputUp
+  {
+    @key long playerId;
+    unsigned long roomId;
+    unsigned long long token;
+    sequence<InputW> inputs;      // newest last; carries the last few ticks (redundancy)
+  };
+
+  // Server -> host only (partition "r<room>.p<hostId>").
+  struct InputDn
+  {
+    @key long playerId;
+    unsigned long roomId;
+    sequence<InputW> inputs;
+  };
+
+  // Quantized car state (56 bytes incl. padding).
+  struct CarW
+  {
+    long playerId;
+    unsigned long lastInputTick;
+    float px; float py; float pz;
+    short qx; short qy; short qz; short qw;   // unit quat * 32767
+    short vx; short vy; short vz;             // m/s * 100
+    short wx; short wy; short wz;             // rad/s * 1000
+    float driftScore;
+    float distance;
+    unsigned long trackSection;
+    octet flags;          // net::CarFlag bits
+    octet nitro;          // gauge 0..1 * 255
+    octet place;          // 1 = leading, 0 = eliminated
+    octet eliminatedOrder;
+  };
+
+  struct SnapUp
+  {
+    @key unsigned long roomId;
+    long playerId;
+    unsigned long long token;
+    unsigned long hostTick;
+    unsigned long long hostTimeUs;  // host monotonic clock, diagnostics/latency
+    octet phase;
+    float phaseTimer;
+    float eliminationTimer;
+    octet eliminationStage;
+    long lastPlacePlayerId;
+    long winnerPlayerId;
+    sequence<CarW> cars;
+  };
+
+  // Server -> whole room (partition "r<room>").
+  struct SnapDn
+  {
+    @key unsigned long roomId;
+    unsigned long hostTick;
+    unsigned long long hostTimeUs;
+    octet phase;
+    float phaseTimer;
+    float eliminationTimer;
+    octet eliminationStage;
+    long lastPlacePlayerId;
+    long winnerPlayerId;
+    sequence<CarW> cars;
+  };
+
+  // Host -> server: reliable match control. op 1 = start match, 2 = set phase.
+  struct CtlUp
+  {
+    @key long playerId;
+    unsigned long roomId;
+    unsigned long long token;
+    unsigned long reqSeq;
+    octet op;
+    unsigned long trackSeed;
+    unsigned long startTick;
+    octet phase;
+  };
+
+  // Server -> room: full match-control state (reliable, transient-local, so a
+  // late joiner gets the current match). Seq numbers are assigned by the
+  // server so clients can tell a new MatchStarted/PhaseChanged from a repeat.
+  struct CtlDn
+  {
+    @key unsigned long roomId;
+    unsigned long matchSeq;
+    unsigned long trackSeed;
+    unsigned long startTick;
+    unsigned long phaseSeq;
+    octet phase;
+  };
+
+  // Handshake / heartbeat / RTT probe. The server answers every valid ping.
+  struct PingUp
+  {
+    @key long playerId;
+    unsigned long roomId;
+    unsigned long long token;
+    unsigned long seq;
+    unsigned long long clientTimeUs;
+  };
+
+  struct PingDn
+  {
+    @key long playerId;
+    unsigned long roomId;
+    unsigned long seq;
+    unsigned long long clientTimeUs;
+  };
+
+  // ===================== LAN mode (serverless, DDS domain 10) =====================
+  // Topics are "Drifto_Lan_*". Inputs/snapshots/pings reuse InputUp, SnapUp,
+  // PingUp, PingDn above. See docs/MULTIPLAYER.md "LAN mode".
+
+  // Room announcement, written by the room's current host (partition "lan"),
+  // re-written every second; listeners drop rooms not refreshed for 3 s.
+  struct LanRoom
+  {
+    @key unsigned long long roomKey;  // random 64-bit; low 32 bits = roomId
+    unsigned long roomId;
+    string<32> name;
+    long hostId;
+    string<16> hostName;
+    unsigned long long hostSession;
+    unsigned long epoch;             // bumps on every host change
+    octet players;
+    octet maxPlayers;
+    boolean inProgress;
+    boolean closed;                  // host left an empty room
+  };
+
+  // Member -> host requests (partition "lan.r<roomId>"). op: 1 join, 2 ready, 3 leave
+  struct LanReq
+  {
+    @key unsigned long long session; // random per NetClient
+    unsigned long roomId;
+    unsigned long seq;
+    octet op;
+    string<16> name;
+    long playerId;
+    unsigned long long token;
+    boolean flag;
+  };
+
+  // Host -> one joiner (partition "lan.r<roomId>.s<session hex>").
+  struct LanJoinRep
+  {
+    @key unsigned long long session;
+    unsigned long roomId;
+    unsigned long seq;
+    boolean ok;
+    string<64> reason;
+    long playerId;
+    unsigned long long token;
+  };
+
+  struct LanMember
+  {
+    long playerId;
+    string<16> name;
+    boolean ready;
+    unsigned long long session;
+    unsigned long long tokenHash;    // so a promoted host can validate the others
+  };
+
+  // Host -> room: authoritative roster (reliable, transient-local).
+  struct LanRoster
+  {
+    @key unsigned long roomId;
+    unsigned long epoch;
+    long hostId;
+    unsigned long long hostSession;
+    long nextPid;
+    string<32> roomName;
+    sequence<LanMember> members;
+  };
+
+  // Host -> room: match control state (reliable, transient-local).
+  struct LanCtl
+  {
+    @key unsigned long roomId;
+    long hostId;
+    unsigned long epoch;
+    unsigned long matchSeq;
+    unsigned long trackSeed;
+    unsigned long startTick;
+    unsigned long phaseSeq;
+    octet phase;
+  };
+};
