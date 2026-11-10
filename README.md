@@ -1,4 +1,34 @@
-# CSD3116 Low Level Programming - Group Assignment
+# CSD3116 Low Level Programming: Drifto
+
+A networked drift-racing game built for the CSD3116 group assignment at SIT / DigiPen, and
+the project where I first had to write a client and server stack instead of calling one.
+
+## What is in here
+
+| Component | Role |
+| --- | --- |
+| `client_folder/`, `game/`, `gfx/`, `audio/` | Drifto game client (C++, OpenGL, GLFW) |
+| `client.c`, `server.c`, `secure_participant.c`, `auth.c` | legacy C client/server used for the protocol and security exercises |
+| `api_server`, `game_server` | account/auth API and gameplay server |
+| `net/` | shared networking library: IDL contract, config, implementation, its own tests |
+| `messages.idl` | the message contract, compiled with `idlc` |
+| `governance.xml`, `permissions.xml` | DDS Security configuration (authentication, access control) |
+| `gen_certs.sh` | certificates for the DDS Security handshake and TLS |
+| `perf/` | measurement harness |
+| `docs/` | assignment documentation |
+
+All networking runs over Eclipse Cyclone DDS rather than raw sockets, with DDS Security
+for authenticated participants. Player passwords are hashed with OpenSSL.
+
+## Attribution
+
+Track generation and vehicle physics are adapted from
+[JohnnyHowe/drifto-old](https://github.com/JohnnyHowe/drifto-old) (C#, 2021). Everything
+else here, including the servers, the networking library, the auth and security
+configuration and the clients, is the team's own work. The borrowed code is used for
+coursework only.
+
+Built by a student team for CSD3116.
 
 ---
 
