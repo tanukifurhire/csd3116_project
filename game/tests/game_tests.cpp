@@ -22,6 +22,7 @@
 #include "game/include/track.h"
 #include "game/include/track_mesh.h"
 #include "game/tests/fake_transport.h"
+#include "client_folder/include/wheel_input.h" // header-only mapping helpers
 
 using namespace game;
 
@@ -1950,6 +1951,43 @@ TEST(session_car_choice_reaches_every_peer)
     off.setLocalCarModel(1);
     off.hostStartMatch(5, {1}, {2, 3, 4});
     CHECK(modelIn(off, 1) == 1 && modelIn(off, 2) == 1 && modelIn(off, 3) == 0 && modelIn(off, 4) == 1);
+}
+
+// ---------------------------------------------------------------------------
+// wheel input mapping (client_folder/include/wheel_input.h, header-only part)
+
+TEST(wheel_pedal_calibrates_from_its_rest_end)
+{
+    // Logitech style: released at +1, floored at -1.
+    client::PedalCalibration cal;
+    CHECK(client::pedalFromAxis(cal, 0.0f, 0.05f) == 0.0f); // no report yet: reads released
+    CHECK(cal.restSign == 0);
+    CHECK(client::pedalFromAxis(cal, 1.0f, 0.05f) == 0.0f);
+    CHECK(cal.restSign == 1);
+    CHECK(std::fabs(client::pedalFromAxis(cal, -1.0f, 0.05f) - 1.0f) < 1e-6f);
+    CHECK(std::fabs(client::pedalFromAxis(cal, 0.0f, 0.0f) - 0.5f) < 1e-6f);
+    // Other style: released at -1.
+    client::PedalCalibration inv;
+    CHECK(client::pedalFromAxis(inv, -1.0f, 0.05f) == 0.0f);
+    CHECK(std::fabs(client::pedalFromAxis(inv, 1.0f, 0.05f) - 1.0f) < 1e-6f);
+    CHECK(client::pedalFromAxis(inv, -0.95f, 0.05f) == 0.0f); // inside the deadzone
+}
+
+TEST(wheel_steer_gain_deadzone_and_invert)
+{
+    client::WheelConfig cfg;
+    cfg.steerGain = 2.0f;
+    cfg.steerDeadzone = 0.0f;
+    CHECK(std::fabs(client::steerFromAxis(0.25f, cfg) - 0.5f) < 1e-6f);
+    CHECK(client::steerFromAxis(0.9f, cfg) == 1.0f); // clamped at full lock
+    CHECK(client::steerFromAxis(-0.9f, cfg) == -1.0f);
+    cfg.invertSteer = true;
+    CHECK(std::fabs(client::steerFromAxis(0.25f, cfg) + 0.5f) < 1e-6f);
+    cfg.invertSteer = false;
+    cfg.steerDeadzone = 0.1f;
+    CHECK(client::steerFromAxis(0.05f, cfg) == 0.0f);
+    CHECK(client::steerFromAxis(0.1f, cfg) == 0.0f);
+    CHECK(client::steerFromAxis(0.2f, cfg) > 0.0f);
 }
 
 // ---------------------------------------------------------------------------

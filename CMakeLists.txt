@@ -104,6 +104,9 @@ endforeach()
 file(GLOB DRIFTO_CLIENT_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/client_folder/src/*.cpp)
 add_executable(drifto ${DRIFTO_CLIENT_SRCS})
 target_link_libraries(drifto PRIVATE drifto_flags ${DRIFTO_MODULE_TARGETS} glfw OpenGL::GL)
+if(WIN32) # racing wheel / pedals (client_folder/src/wheel_input.cpp)
+  target_link_libraries(drifto PRIVATE dinput8 dxguid)
+endif()
 set_target_properties(drifto PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:drifto>")
 
 # Headless LAN probe (net/tests/lan_probe.cpp): cross-OS LAN checks, no window.

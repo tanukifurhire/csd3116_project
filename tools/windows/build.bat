@@ -24,11 +24,15 @@ if not exist "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" (
   exit /b 1
 )
 echo [build] Visual Studio: %VSDIR%
+rem vcvars/VsDevCmd call vswhere.exe by bare name; Build Tools installs don't put the
+rem Installer dir on PATH, so add it (else: "'vswhere.exe' is not recognized").
+set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 cd /d "%ROOT%"
 if not defined VCPKG_ROOT set "VCPKG_ROOT=%VSDIR%\VC\vcpkg"
 if not exist "%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" (
-  echo [build] vcpkg not found at %VCPKG_ROOT% ^(install the vcpkg component or set VCPKG_ROOT^)
+  rem quoted: VCPKG_ROOT usually holds "(x86)", whose ")" would close this if-block early
+  echo [build] vcpkg not found at "%VCPKG_ROOT%" ^(install the vcpkg component or set VCPKG_ROOT^)
   exit /b 1
 )
 echo [build] vcpkg: %VCPKG_ROOT%

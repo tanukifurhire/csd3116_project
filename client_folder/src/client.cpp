@@ -137,6 +137,7 @@ const char *usageText()
            "              [--low] [--demo] [--screenshot FILE.png] [--shot-delay S]\n"
            "              [--lan] [--lan-peer IP[:PORT]]... [--login NAME[:PASS]] [--room NAME] [--autostart N]\n"
            "              [--headless] [--fast] [--races N] [--duration S] [--fps N] [--mute] [--volume V]\n"
+           "              [--no-wheel] [--wheel-debug]\n"
            "  --offline      start an offline elimination race against bots straight away\n"
            "  --bots N       offline opponents, 1..3 (default 3)\n"
            "  --api          online API service address (default: last used, else 127.0.0.1)\n"
@@ -157,7 +158,11 @@ const char *usageText()
            "                 offline races as fast as the CPU allows; --races N / --duration S end it\n"
            "  --mute / --volume V   sound off / master volume 0..1 (remembered)\n"
            "  --car ae86|rx7 the car you drive (remembered; A/D or LEFT/RIGHT in the menus)\n"
-           "controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting), Esc back\n";
+           "  --no-wheel     ignore racing wheels / pedals (DirectInput, Windows)\n"
+           "  --wheel-debug  print the wheel's raw axes and buttons once a second (for wheel_* settings)\n"
+           "controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting), Esc back\n"
+           "wheel:    steer with the wheel, throttle pedal (auto-throttle until first pressed), paddles nitro,\n"
+           "          D-pad + Cross/A (Enter) + Circle/B (Esc) in the menus; remap with wheel_* in settings.txt\n";
 }
 
 // Fill Options from argv. Returns false on a bad argument (error set) or on
@@ -179,6 +184,8 @@ bool parseArgs(int argc, char **argv, Options &o, std::string &error)
         else if (a == "--headless") { o.headless = true; o.demo = true; }
         else if (a == "--fast") o.fast = true;
         else if (a == "--mute") o.mute = true;
+        else if (a == "--no-wheel") o.noWheel = true;
+        else if (a == "--wheel-debug") o.wheelDebug = true;
         else if (a == "--volume")
         {
             const char *v = next("0..1");
@@ -323,6 +330,13 @@ void Client::loadSettings()
         else if (k == "car") carModel_ = v == "rx7" ? 1 : 0;
         else if (k == "mode")
             menuIndex_ = v == "online" ? 1 : (v == "lan" ? 2 : 0); // preselect only; --lan / the menu decide
+        else
+        {
+            // wheel_* (and anything unknown) is kept verbatim for saveSettings().
+            if (k.compare(0, 5, "wheel") == 0 && !applyWheelSetting(wheelCfg_, k, v))
+                std::fprintf(stderr, "drifto: settings.txt: bad value for %s: '%s' (ignored)\n", k.c_str(), v.c_str());
+            extraSettings_.push_back(line);
+        }
     }
 }
 
@@ -338,6 +352,7 @@ void Client::saveSettings(const char *mode) const
     if (!out) return;
     out << "mode=" << mode << "\n" << "name=" << nameField_.text << "\n" << "api=" << opt_.apiHost << "\n"
         << "volume=" << volume_ << "\n" << "car=" << (carModel_ ? "rx7" : "ae86") << "\n";
+    for (const std::string &line : extraSettings_) out << line << "\n";
 }
 
 // Pick our car (0 = AE86, 1 = RX-7; cosmetic). The sessions stamp it on our
@@ -415,6 +430,11 @@ bool Client::Init()
         c->windowFocused_ = focused != 0;
         if (c->snd_) c->snd_->setMuted(c->opt_.mute || !c->windowFocused_);
     });
+
+    // Racing wheel: picked up now or whenever one is plugged in later.
+    wheelCfg_.enabled = wheelCfg_.enabled && !opt_.noWheel && !opt_.demo;
+    wheelCfg_.debug = opt_.wheelDebug;
+    wheel_.init(window_, wheelCfg_);
 
     renderer_ = std::make_unique<gfx::Renderer>();
     if (!renderer_->init(window_, opt_.assetDir))
@@ -498,6 +518,7 @@ void Client::Shutdown()
     gauges_.reset();
     if (renderer_) renderer_->shutdown();
     renderer_.reset();
+    wheel_.shutdown();
     if (window_)
     {
         glfwDestroyWindow(window_);
@@ -533,6 +554,11 @@ int Client::Run()
     {
         glfwPollEvents();
         double now = nowSeconds();
+        // Wheel buttons / hat act like keys in the menus (only while focused,
+        // like the keyboard).
+        wheel_.update(now);
+        for (int key : wheel_.takeKeyPresses())
+            if (windowFocused_) handleKey(key, 0);
         if (opt_.duration > 0 && now - startTime_ > opt_.duration) quit_ = true;
         // Frame time in seconds, clamped so a stall does not cause a burst of ticks.
         double dt = std::min(now - last, 0.25); // clamp hitches (debugger, window drag)
@@ -611,7 +637,19 @@ net::CarInput Client::readDriveInput(uint32_t tick, const game::CarSimState *car
     float right = (down(GLFW_KEY_D) || down(GLFW_KEY_RIGHT)) ? 1.0f : 0.0f;
     // drifto controls: constant throttle, steer, plus nitro. Steering is
     // smoothed inside the (deterministic) simulation.
-    return game::driveInput(tick, right - left, down(GLFW_KEY_SPACE));
+    net::CarInput in = game::driveInput(tick, right - left, down(GLFW_KEY_SPACE));
+    // Wheel + pedals add to the keyboard (either can drive). The throttle
+    // pedal takes over from the auto-throttle once it has been pressed, so a
+    // wheel without pedals -- or pedals never touched -- still plays as usual.
+    const WheelState &w = wheel_.state();
+    if (w.connected && windowFocused_)
+    {
+        in.steer = dm::clampf(in.steer + w.steer, -1.0f, 1.0f);
+        in.nitro = in.nitro || w.nitro;
+        if (wheelCfg_.usePedals && w.throttleSeen) in.throttle = w.throttle;
+        in.brake = w.brake;
+    }
+    return in;
 }
 
 // Start a local race: a loopback "network" with us as host (player 1) and 1-3
@@ -1791,7 +1829,10 @@ void Client::drawRaceHud(game::MultiplayerSession &s, const std::vector<game::Ca
     }
 
     if (raceTime_ < 8.0f && !opt_.demo && phase != net::MatchPhase::Results)
-        text(20 * sc, H - 30 * sc, 1.6f * sc, "A/D or LEFT/RIGHT steer   SPACE nitro (drift to charge)   ESC menu", kGrey);
+        text(20 * sc, H - 30 * sc, 1.6f * sc,
+             wheel_.state().connected ? "WHEEL steer   THROTTLE pedal   PADDLES nitro (drift to charge)   CIRCLE/B menu"
+                                      : "A/D or LEFT/RIGHT steer   SPACE nitro (drift to charge)   ESC menu",
+             kGrey);
     if (opt_.demo) text(20 * sc, H - 30 * sc, 1.6f * sc, fmt("%.0f fps", fps_), kDim);
 }
 

@@ -145,7 +145,7 @@ Other modes, no servers needed:
 ./drifto --lan                      # LAN: rooms are discovered on the local network
 ./drifto --car rx7                  # pick the RX-7 (default AE86); also A/D in the menus
 ```
-Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting; a burn needs 5% to start), Esc back.
+Controls: auto-throttle, A/D or Left/Right steer, Space nitro (charges while drifting; a burn needs 5% to start), Esc back. Windows: racing wheels and pedals too (see "Racing wheel and pedals").
 In the menus, room list and lobby A/D or Left/Right picks your car (AE86 / RX-7, same physics; remembered).
 Lobby: H host / C create a room, Space ready, Enter start (host). Max 4 players per room.
 All players and servers need the same `certs/` (or all use `--insecure`). See `docs/MULTIPLAYER.md`
@@ -153,7 +153,7 @@ for deployment on a public server, ports and the LAN details.
 
 **Tests and profiling**
 ```bash
-make check_game                     # 49 simulation tests (no GL, no DDS)
+make check_game                     # 51 simulation tests (no GL, no DDS)
 make game_tests_asan && ./build/asan/game_tests
 make net_tests && ./net_tests       # 13 networking scenarios, starts its own servers
 make bench_hot && perf stat ./bench_hot bot 100   # hot-path benchmark (perf/)
@@ -189,8 +189,8 @@ Windows than from WSL2, because WSL2's NAT networking blocks LAN multicast.
 ### Prerequisites (Windows)
 
 - **Visual Studio 2022** (Community is fine) with the *Desktop development with
-  C++* workload. It includes MSVC, CMake and **vcpkg**. VS 2026 also works, but the
-  scripts pick 2022.
+  C++* workload. It includes MSVC, CMake and **vcpkg**. *Build Tools for Visual Studio 2022*
+  with the same workload also works. VS 2026 also works, but the scripts pick 2022.
 - **Git for Windows** on `PATH`. vcpkg uses it to fetch its port registry.
 - Internet access on the first build. vcpkg downloads and builds `glfw3`, `openssl`
   and `cyclonedds` (0.10.5 with DDS Security, wire-compatible with the Linux
@@ -251,3 +251,43 @@ drifto.exe --headless --offline --fast --races 1 :: no window: quick self-test
   link then falls back to TCP.
 - `lan_probe.exe host|join NAME [--peer IP] [--insecure]` (built next to
   `drifto.exe`) is a headless LAN check without a window.
+
+### Racing wheel and pedals (DirectInput)
+
+On Windows, `drifto.exe` drives with a DirectInput wheel (Logitech G29/G920/G27,
+Thrustmaster, Fanatec and others that show up as a *driving* device). The
+keyboard keeps working alongside it. A wheel plugged in while the game is
+running is picked up within a few seconds.
+
+- **Steer**: the wheel. The car reaches full lock at 1/2.5 of the wheel's
+  rotation (180 deg on a 900 deg wheel; set `wheel_steer_gain`).
+- **Throttle pedal**: auto-throttle stays on until you first press the pedal.
+  From then on the pedal sets the throttle. Pedals calibrate themselves:
+  the end of the axis where a released pedal rests counts as 0.
+- **Brake pedal**: read and sent with the inputs, but the arcade physics has
+  no brake, so it does nothing yet.
+- **Nitro**: shift paddles (buttons 4/5 on Logitech).
+- **Menus**: D-pad = arrow keys, Cross/A = Enter, Circle/B = Esc.
+
+`drifto.exe --wheel-debug` prints the raw axes and the buttons you are holding
+once a second. Use it to find the numbers for a wheel that is mapped differently,
+then add lines to `%APPDATA%\drifto\settings.txt` (they are kept when the game
+rewrites the file):
+
+| key | default | meaning |
+| --- | --- | --- |
+| `wheel` | `on` | `off` = ignore wheels (same as `--no-wheel`) |
+| `wheel_device` | *(first wheel)* | use the controller whose name contains this text, even if it is not a driving device |
+| `wheel_steer_axis` | `x` | `x y z rx ry rz slider0 slider1` |
+| `wheel_throttle_axis` / `wheel_brake_axis` | `y` / `rz` | `none` disables that pedal |
+| `wheel_combined_pedals` | `off` | one axis for both pedals (throttle on `wheel_throttle_axis`, towards -1) |
+| `wheel_pedals` | `on` | `off` = auto-throttle always, pedals ignored |
+| `wheel_steer_gain` | `2.5` | 1 = full wheel lock for full steering |
+| `wheel_steer_deadzone` / `wheel_pedal_deadzone` | `0.01` / `0.05` | fraction of the axis |
+| `wheel_invert_steer` | `off` | |
+| `wheel_nitro_buttons` | `4,5` | comma-separated, 0-based |
+| `wheel_accept_button` / `wheel_back_button` | `0` / `2` | `-1` = none |
+
+Force feedback is not used. A wheel without a centring spring feels loose,
+so turn on the spring in the wheel's own software (G HUB, Thrustmaster
+Control Panel) if you want one.

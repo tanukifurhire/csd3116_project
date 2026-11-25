@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "client_folder/include/net_transport.h"
+#include "client_folder/include/wheel_input.h"
 #include "client_folder/include/world_view.h"
 #include "game/include/car_physics.h"
 #include "game/include/chase_camera.h"
@@ -58,6 +59,8 @@ struct Options
     bool mute = false;               // --mute: no sound at all
     float volume = -1.0f;            // --volume 0..1 (< 0 = remembered setting, else 0.8)
     int carModel = -1;               // --car ae86|rx7 (< 0 = remembered setting, else AE86)
+    bool noWheel = false;            // --no-wheel: ignore DirectInput wheels / pedals
+    bool wheelDebug = false;         // --wheel-debug: print raw wheel axes / buttons
     // Automation (smoke tests / demos): log in, join-or-create a room, ready
     // up, and (host) start once `autoStart` players are in the room.
     std::string autoLogin;           // "NAME:PASS" (online) or "NAME" (LAN)
@@ -233,6 +236,12 @@ private:
     dm::Vec3 lastListenerPos_;
     dm::Vec3 listenerVel_;
     bool windowFocused_ = true;
+    // Racing wheel + pedals (DirectInput on Windows; see wheel_input.h).
+    WheelInput wheel_;
+    WheelConfig wheelCfg_;
+    // settings.txt lines this client does not own (wheel_*, unknown keys):
+    // written back unchanged so saveSettings() never drops hand edits.
+    std::vector<std::string> extraSettings_;
     float volume_ = 0.8f;
     int32_t spectateId_ = 0;
     int32_t cameraCarId_ = -1;
